@@ -148,7 +148,7 @@ def render_tutorial_page():
         ('7. Money', '**Finance** is the detailed ledger. **Live Money Meter** on major pages. **Weekly Performance** shows result money only.'),
         ('8. Contracts & Free Agency', '**Contracts** for renewals; free agents and bidding under crisis rules.'),
         ('9. Twitter', 'Posts, fan heat, and **Recruit / Tamper** for cross-brand recruitment.'),
-        ('10. Weekly Performance', 'Main show results page — ratings, viewership, attendance, P/L, descriptors.'),
+        ('10. Weekly Performance', 'Fan view rating graphs, Dirt Sheet grading table, and full show reports per brand.'),
         ('11. Season Awards', 'End-of-year weighted score (story 30%, continuity 20%, sponsors 15%, PLE 15%, growth, profit 3%).'),
         ('12. Saves', 'Auto-save on edits. **Save Center** for backup. Each private session is isolated — NXT never overwrites SmackDown.'),
     ]

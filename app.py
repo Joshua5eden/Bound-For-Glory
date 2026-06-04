@@ -210,10 +210,9 @@ def get_brand_tokens(comp):
  return dict(BRAND_UI.get(comp, BRAND_UI['NXT']))
 
 def set_active_brand(comp):
- """Set active brand from page tabs / login. Clears sidebar widget state so it can re-init."""
+ """Sync active brand from page tabs / login. Do not touch sidebar_brand — sidebar runs first each run."""
  if comp in PLAYABLE:
   st.session_state.active_brand=comp
-  st.session_state.pop('sidebar_brand',None)
 
 def inject_brand_theme(comp=None):
  """Single theme injection for app background, cards, and metrics."""
@@ -5074,6 +5073,161 @@ def _delta_html(label,prev_val,new_val,fmt='num',money_fmt=False):
  d=int(new_val)-int(prev_val); col='#2ecc71' if d>=0 else '#e74c3c'; sign='+' if d>=0 else '−'
  return f"<div class='money-meter-stat'><b>{label}:</b> {prev_val:,} → {new_val:,} <span style='color:{col}'>{sign}{abs(d):,}</span></div>"
 
+def _company_shows_chronological(company):
+ return sorted(
+  [h for h in st.session_state.get('weekly_history',[]) if h.get('company')==company and (h.get('episode_rating') is not None or h.get('final_rating') is not None or h.get('viewership'))],
+  key=lambda x:int(x.get('week',0)),
+ )
+
+def _dirt_sheet_headline(hist):
+ review=(hist.get('dirt_sheet_review') or '').strip()
+ if not review: return '—'
+ for line in review.split('\n'):
+  ln=line.strip()
+  if 'headline' in ln.lower() and ':' in ln:
+   return ln.split(':',1)[-1].strip().strip('*')[:120]
+ first=review.split('\n')[0].strip()
+ return first[:100] if first else '—'
+
+def _metrics_chart_df(company):
+ import pandas as pd
+ rows=[]
+ for h in _company_shows_chronological(company):
+  wk=int(h.get('week',0))
+  vw=int(h.get('viewership',0))
+  att=int((h.get('logistics') or {}).get('attendance',0))
+  rows.append({
+   'Week':wk,
+   'Episode Rating':round(float(h.get('episode_rating') or h.get('final_rating') or 0),1),
+   'Viewership (millions)':round(vw/1_000_000,2),
+   'Attendance (thousands)':round(att/1000,1),
+  })
+ return pd.DataFrame(rows) if rows else None
+
+def _all_brands_chart_df(metric_key):
+ """metric_key: 'Episode Rating' or 'Viewership (millions)'"""
+ import pandas as pd
+ weeks=sorted({int(h.get('week',0)) for h in st.session_state.get('weekly_history',[])})
+ if not weeks: return None
+ data={'Week':weeks}
+ for co in PLAYABLE:
+  col=[]
+  by_wk={int(h.get('week',0)):h for h in _company_shows_chronological(co)}
+  for wk in weeks:
+   h=by_wk.get(wk)
+   if not h:
+    col.append(None)
+   elif metric_key=='Episode Rating':
+    col.append(round(float(h.get('episode_rating') or h.get('final_rating') or 0),1))
+   else:
+    col.append(round(int(h.get('viewership',0))/1_000_000,2))
+  data[co]=col
+ return pd.DataFrame(data).set_index('Week')
+
+def render_fan_view_rating_charts(company=None):
+ """Line charts: episode rating, fan viewership, attendance trend."""
+ st.markdown('<div class="section-header">Fan View & Rating Trends</div>',unsafe_allow_html=True)
+ st.caption('Episode rating (1–10) and fan viewership from completed **Book Show** runs — updates each week.')
+ if company and company in PLAYABLE:
+  df=_metrics_chart_df(company)
+  if df is None or df.empty:
+   st.info(f'No {company} show history yet. Book and run a show to populate this graph.')
+   return
+  c1,c2=st.columns(2)
+  with c1:
+   st.markdown('**Episode rating by week**')
+   st.line_chart(df.set_index('Week')[['Episode Rating']],height=220)
+  with c2:
+   st.markdown('**Fan viewership by week**')
+   st.line_chart(df.set_index('Week')[['Viewership (millions)']],height=220)
+  st.markdown('**Combined metrics**')
+  st.line_chart(df.set_index('Week'),height=260)
+  if len(df)>=2:
+   last=df.iloc[-1]; prev=df.iloc[-2]
+   d1,d2,d3=st.columns(3)
+   dr=float(last['Episode Rating'])-float(prev['Episode Rating'])
+   dv=float(last['Viewership (millions)'])-float(prev['Viewership (millions)'])
+   d1.metric('Latest rating',f"{last['Episode Rating']}/10",f"{dr:+.1f} vs prior week")
+   d2.metric('Latest viewership',f"{last['Viewership (millions)']:.2f}M",f"{dv:+.2f}M vs prior week")
+   d3.metric('Latest attendance',f"{int(last['Attendance (thousands)']*1000):,}",f"Week {int(last['Week'])}")
+  return
+ st.markdown('**All brands — episode rating**')
+ df_r=_all_brands_chart_df('Episode Rating')
+ if df_r is not None and not df_r.empty:
+  st.line_chart(df_r,height=240)
+ else:
+  st.caption('No rating history yet.')
+ st.markdown('**All brands — fan viewership (millions)**')
+ df_v=_all_brands_chart_df('Viewership (millions)')
+ if df_v is not None and not df_v.empty:
+  st.line_chart(df_v,height=240)
+ else:
+  st.caption('No viewership history yet.')
+
+def render_dirt_sheet_grading_hub(company,shows=None):
+ """Dirt Sheet letter grades + category breakdown per completed show."""
+ st.markdown('<div class="section-header">Dirt Sheet Grading</div>',unsafe_allow_html=True)
+ st.caption('Insider-style grades from the same story-first rubric used when you **Grade Show** — headline, letter grade, and category scores.')
+ pool=shows if shows is not None else _company_shows_chronological(company)
+ pool=sorted(pool,key=lambda x:int(x.get('week',0)),reverse=True)
+ if not pool:
+  st.info(f'No {company} Dirt Sheet grades yet. Complete a show on **Book Show** to generate reviews.')
+  return
+ summary=[]
+ for h in pool[:24]:
+  wk=int(h.get('week',0))
+  rating=float(h.get('episode_rating') or h.get('final_rating') or 0)
+  br=h.get('rating_breakdown') or {}
+  summary.append({
+   'Week':wk,
+   'Show':(h.get('show_name') or 'Show')[:36],
+   'Rating':f'{rating:.1f}',
+   'Letter':h.get('grade') or _grade_letter(rating),
+   'Viewership':f"{int(h.get('viewership',0)):,}",
+   'Dirt Sheet':_dirt_sheet_headline(h)[:70],
+   'Source':h.get('dirt_sheet_label','Built-in') or 'Built-in',
+  })
+ st.dataframe(summary,use_container_width=True,hide_index=True)
+ pick=pool[0]
+ with st.expander(f"Latest — Week {int(pick.get('week',0))} · {pick.get('show_name','Show')}",expanded=True):
+  _render_dirt_sheet_grade_card(pick)
+ st.markdown('**Prior weeks**')
+ for h in pool[1:12]:
+  wk=int(h.get('week',0))
+  rating=float(h.get('episode_rating') or h.get('final_rating') or 0)
+  with st.expander(f"Week {wk} — {h.get('show_name','Show')} · {rating:.1f}/10 · {h.get('grade',_grade_letter(rating))}",expanded=False):
+   _render_dirt_sheet_grade_card(h)
+
+def _render_dirt_sheet_grade_card(hist):
+ company=hist.get('company','')
+ week=int(hist.get('week',0))
+ rating=float(hist.get('episode_rating') or hist.get('final_rating') or 0)
+ letter=hist.get('grade') or _grade_letter(rating)
+ br=hist.get('rating_breakdown') or {}
+ vw=int(hist.get('viewership',0))
+ ch=int(hist.get('viewership_change',0))
+ m1,m2,m3,m4=st.columns(4)
+ m1.metric('Episode rating',f'{rating:.1f}/10')
+ m2.metric('Letter grade',letter)
+ m3.metric('Fan viewership',f'{vw:,}' if vw else '—')
+ m4.metric('Vs last week',f'{ch:+,}' if ch else '—')
+ if br:
+  with bfg_card('Category grades (Dirt Sheet rubric)'):
+   st.caption('Weights: Story 25% · Emotion 20% · Character 15% · Rivalry 15% · Champion 10% · Promo/Match 10% · Business/Venue 5%')
+   cols=st.columns(4)
+   for i,(label,score) in enumerate(br.items()):
+    cols[i%4].metric(label,f'{float(score):.1f}/10',_grade_letter(float(score)))
+ if hist.get('viewership_modifiers'):
+  with st.expander('Why viewership moved',expanded=False):
+   for n in hist.get('viewership_modifiers',[])[:8]: st.caption('• '+str(n))
+ headline=_dirt_sheet_headline(hist)
+ if headline and headline!='—':
+  st.markdown(f"**Dirt Sheet headline:** {headline}")
+ if hist.get('dirt_sheet_review'):
+  render_long_markdown(hist['dirt_sheet_review'],f"Dirt Sheet — Week {week} ({hist.get('dirt_sheet_label','Review')})",expanded=len(hist.get('dirt_sheet_review',''))<900)
+ else:
+  st.caption('No full Dirt Sheet write-up stored for this week.')
+
 def render_weekly_performance_card(hist):
  company=hist.get('company',''); week=int(hist.get('week',0))
  ai=ensure_hist_ai_analysis(hist)
@@ -5227,7 +5381,7 @@ def render_all_brands_performance(week_filter):
 
 def render_weekly_performance_page():
  ensure_finance_state()
- render_page_shell('Weekly Performance',subtitle='AI-determined ratings, viewership, attendance, and money from Book Show results — read-only in multiplayer.',show_meter=False,show_badge=True)
+ render_page_shell('Weekly Performance',subtitle='Fan view graphs, Dirt Sheet grading, ratings, viewership, attendance, and money from Book Show — read-only in multiplayer.',show_meter=False,show_badge=True)
  brand=st.radio('Brand',PLAYABLE+['All Brands'],horizontal=True,key='wp_brand',index=PLAYABLE.index(st.session_state.get('active_brand','NXT')) if st.session_state.get('active_brand') in PLAYABLE else 0)
  if brand!='All Brands':
   set_active_brand(brand)
@@ -5255,15 +5409,28 @@ def render_weekly_performance_page():
    fweekly=st.checkbox('Weekly shows only',key='wp_f_weekly')
  filters={'week':fw if fw!='All' else None,'show_type':fst if fst!='All' else None,'rating_min':fr1,'rating_max':fr2,'profit_filter':fpl,'viewership_min':fv1,'viewership_max':fv2,'sellout':fsell if fsell!='All' else 'All','ple_only':fple,'weekly_only':fweekly}
  if brand=='All Brands':
+  render_fan_view_rating_charts(company=None)
+  st.divider()
   render_all_brands_performance(fw if fw!='All' else 'Latest')
+  for co in PLAYABLE:
+   co_shows=_company_shows_chronological(co)
+   if co_shows:
+    with st.expander(f'{co} — Dirt Sheet grades',expanded=(co==st.session_state.get('active_brand','NXT'))):
+     render_dirt_sheet_grading_hub(co,shows=co_shows)
   return
+ tab_trends,tab_dirt,tab_detail=st.tabs(['Fan View Trends','Dirt Sheet Grades','Show Reports'])
  shows=filter_weekly_shows(brand,filters)
- if not shows:
-  st.info(f'No completed {brand} shows match these filters yet.')
-  return
- st.caption(f"Showing **{len(shows)}** completed show(s) for **{brand}**.")
- for h in shows:
-  render_weekly_performance_card(h)
+ with tab_trends:
+  render_fan_view_rating_charts(company=brand)
+ with tab_dirt:
+  render_dirt_sheet_grading_hub(brand,shows=shows if shows else _company_shows_chronological(brand))
+ with tab_detail:
+  if not shows:
+   st.info(f'No completed {brand} shows match these filters yet.')
+  else:
+   st.caption(f"Showing **{len(shows)}** completed show(s) for **{brand}**.")
+   for h in shows:
+    render_weekly_performance_card(h)
 
 def crisis_story_fn(w,company):
  return crisis.wrestler_storyline_importance(w,company,lambda:st.session_state.rivalries,is_champion_name,st.session_state.weekly_history)

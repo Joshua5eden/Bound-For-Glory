@@ -17,8 +17,8 @@ Wrestling GM simulator — run **NXT**, **SmackDown**, and **WCW** in one shared
 ## Run locally
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/bound-for-glory.git
-cd bound-for-glory
+git clone git@github.com:Joshua5eden/Bound-For-Glory.git
+cd Bound-For-Glory
 pip3 install -r requirements.txt
 cp .env.example .env   # optional — see below
 python3 scripts/preflight_check.py
