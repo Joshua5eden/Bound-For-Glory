@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+.streamlit/secrets.toml
+api_keys.json
+private_keys/
+
+# Python
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local game data & generated media
+data/audio/
+data/sessions/*
+!data/sessions/.gitkeep
+data/universe/*.json
+!data/universe/.gitkeep
+data/bfg_multiplayer.db
+local_saves/
+*.db
