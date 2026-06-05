@@ -22,7 +22,19 @@ def load_project_env():
 load_project_env()
 
 import bfg_sessions as mp
-import bfg_supabase as sb
+try:
+ import bfg_supabase as sb
+except ModuleNotFoundError:
+ class _SupabaseStub:
+  @staticmethod
+  def supabase_configured(): return False
+  @staticmethod
+  def load_merged_universe(*_a,**_k): return None
+  @staticmethod
+  def load_light_session(*_a,**_k): return None
+  @staticmethod
+  def sync_session_saves(*_a,**_k): return False
+ sb=_SupabaseStub()
 import bfg_crisis as crisis
 import bfg_show_quality as showq
 import bfg_twitter_recruit as twrecruit
@@ -1205,18 +1217,32 @@ def image_file_ok(path):
   if not p.is_file() or p.stat().st_size<32: return False
   from PIL import Image
   with Image.open(p) as im:
-   im.verify()
+   im.load()
   return True
  except Exception:
   return False
 
+def purge_invalid_asset_files():
+ """Delete broken uploads so previews never crash the page."""
+ for root in ('assets/wrestlers','assets/owners','assets/gm','assets/staff','assets/podcast_hosts','assets/logos','assets/banners','assets/belts'):
+  d=Path(root)
+  if not d.is_dir(): continue
+  for p in d.iterdir():
+   if p.is_file() and p.suffix.lower() in ('.png','.jpg','.jpeg','.webp') and not image_file_ok(p):
+    try: p.unlink()
+    except OSError: pass
+
 def safe_st_image(path,w=80,fallback_label='IMG',fallback_h=None):
- if path and image_file_ok(path):
+ if path:
   try:
-   st.image(path,width=w)
+   from PIL import Image
+   with Image.open(path) as im:
+    im.load()
+    st.image(im,width=w)
    return
   except Exception:
-   pass
+   try: Path(path).unlink(missing_ok=True)
+   except OSError: pass
  show_img_slot(fallback_label,w,fallback_h or (w-10 if w>50 else 70))
 
 def img_path(n):
@@ -8234,6 +8260,7 @@ def ensure_data_dirs():
  Path('data/audio/nxt_unfiltered').mkdir(parents=True,exist_ok=True)
  for folder in picture_folder_map().values():
   Path(folder).mkdir(parents=True,exist_ok=True)
+ purge_invalid_asset_files()
 
 def init():
  ensure_data_dirs()

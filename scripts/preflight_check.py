@@ -14,6 +14,7 @@ MODULES = [
     'bfg_sponsor_objectives.py',
     'bfg_season_awards.py',
     'bfg_sessions.py',
+    'bfg_supabase.py',
     'bfg_crisis.py',
     'bfg_show_quality.py',
     'bfg_twitter_recruit.py',
