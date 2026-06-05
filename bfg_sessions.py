@@ -27,6 +27,12 @@ def _now_iso():
 
 def database_url_configured():
  try:
+  import bfg_supabase as sb
+  if sb.supabase_configured():
+   return True
+ except Exception:
+  pass
+ try:
   import streamlit as st
   url = st.secrets.get('DATABASE_URL', '') or st.secrets.get('SUPABASE_URL', '')
   return bool(url)
@@ -125,9 +131,32 @@ def session_meta_path(session_id):
  return session_dir(session_id) / 'meta.json'
 
 
+def normalize_invite_code(invite_code):
+ """Accept BFG-6051, bfg-6051, 6051, extra spaces."""
+ raw = (invite_code or '').strip().upper().replace(' ', '')
+ if not raw:
+  return ''
+ if raw.startswith('BFG-'):
+  return raw
+ if raw.startswith('BFG'):
+  rest = raw[3:].lstrip('-')
+  return f'BFG-{rest}' if rest else raw
+ if raw.isdigit():
+  return f'BFG-{raw}'
+ return raw
+
+
 def resolve_invite(invite_code):
  reg = _load_registry()
- return reg.get((invite_code or '').strip().upper())
+ key = normalize_invite_code(invite_code)
+ if not key:
+  return None
+ if key in reg:
+  return reg[key]
+ for k, v in reg.items():
+  if (k or '').strip().upper() == key:
+   return v
+ return None
 
 
 def register_invite(invite_code, session_id):
@@ -165,6 +194,12 @@ def save_session_meta(session_id, meta):
  )
  conn.commit()
  conn.close()
+ try:
+  import bfg_supabase as sb
+  if sb.supabase_configured():
+   sb.save_private_session_meta(session_id, meta)
+ except Exception:
+  pass
 
 
 def load_session_meta(session_id):
@@ -236,8 +271,33 @@ def create_private_session(game_name, creator_name):
 
 def join_private_session(invite_code, player_name, access_code):
  init_storage()
- session_id = resolve_invite(invite_code)
+ invite_norm = normalize_invite_code(invite_code)
+ session_id = resolve_invite(invite_norm or invite_code)
  if not session_id:
+  try:
+   import bfg_supabase as sb
+   if sb.supabase_configured():
+    hit = sb.find_session_by_invite(invite_code)
+    if hit:
+     session_id = hit.get('session_id')
+     meta = hit.get('payload') or {}
+     if isinstance(meta, str):
+      meta = json.loads(meta)
+     if meta and session_id:
+      role_info = match_access_code(meta, access_code)
+      if not role_info:
+       return None, 'Invalid access code for this game. Use Admin, NXT, SmackDown, or WCW GM code.'
+      return {
+       'session_id': session_id,
+       'game_name': meta.get('game_name', ''),
+       'invite_code': meta.get('invite_code', ''),
+       'player_name': (player_name or '').strip(),
+       'role': role_info['role'],
+       'assigned_company': role_info['company'],
+       'meta': meta,
+      }, None
+  except Exception:
+   pass
   return None, 'Invite code not found. Check the code or create a new private game.'
  meta = load_session_meta(session_id)
  if not meta:

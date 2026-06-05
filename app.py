@@ -111,6 +111,11 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] { color: var(--bb-text
 [data-testid="stTabs"] button { font-weight: 700 !important; border-radius: 10px 10px 0 0 !important; }
 [data-testid="stExpander"] summary { font-weight: 700 !important; color: var(--bb-text, #eee) !important; }
 .scroll-box { max-height: 720px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+.pic-mgr-panel { width: 100%; padding-bottom: 2rem; }
+.pic-mgr-panel [data-testid="stVerticalBlock"] { overflow: visible !important; }
+html, body, [data-testid="stAppViewContainer"], section.main, section.main .block-container {
+ overflow-y: auto !important; height: auto !important; max-height: none !important;
+}
 .game-title-sm { margin-top: 4px !important; }
 div[data-testid="stSelectbox"], div[data-baseweb="select"] { overflow: visible !important; }
 .tw-stat-row [data-testid="stMetric"] { background: linear-gradient(145deg,var(--bb-card1,#141414),var(--bb-card2,#0a0012)); border: 1px solid var(--bb-border,#333); border-radius: 12px; padding: 8px 10px; }
@@ -2836,12 +2841,15 @@ def ensure_ai_mode_prefs():
  elif 'bfg_force_builtin_ai' not in st.session_state:
   st.session_state.bfg_force_builtin_ai=False
 
+def openai_key_available():
+ if st.session_state.get('openai_quota_exceeded'): return False
+ return bool(get_openai_api_key())
+
 def should_use_openai_ai():
  ensure_ai_mode_prefs()
  if builtin_ai_env_on(): return False
  if st.session_state.get('bfg_force_builtin_ai'): return False
- if st.session_state.get('openai_quota_exceeded'): return False
- return bool(get_openai_api_key())
+ return openai_key_available()
 
 def get_ai_status():
  ensure_ai_mode_prefs()
@@ -2883,8 +2891,11 @@ def format_ai_error(exc):
   return f'OpenAI model not available: {raw[:200]}. Set OPENAI_MODEL in `.env` (e.g. gpt-4o-mini).'
  return f'AI error: {raw[:400]}'
 
-def ai(prompt,model=None,max_input=30000,max_output=14000,temperature=0.55):
- if not should_use_openai_ai(): return None
+def ai(prompt,model=None,max_input=30000,max_output=14000,temperature=0.55,*,twitter=False):
+ if twitter:
+  if not openai_key_available(): return None
+ elif not should_use_openai_ai():
+  return None
  key=get_openai_api_key()
  if not key: return None
  text=(prompt or '')[:max_input]
@@ -2976,7 +2987,7 @@ def recent_tweet_texts(limit=80):
  return [(p.get('text') or '').strip() for p in st.session_state.get('twitter_posts',[])[:limit] if (p.get('text') or '').strip()]
 
 def twitter_ai_enabled():
- return bool(st.session_state.get('twitter_force_ai',True)) and should_use_openai_ai()
+ return bool(st.session_state.get('twitter_force_ai',True)) and openai_key_available()
 
 def ensure_unique_tweet(generate_fn,max_tries=32):
  """Never return duplicate text — procedural suffix as last resort."""
@@ -3266,7 +3277,7 @@ def deep_tweet_generate(w,comp,topic,tone,mode='original',mention='',reply_conte
  if twitter_ai_enabled():
   for attempt in range(6):
    uniq=f" Unique batch {random.randint(10**9,10**10-1)} — wording must be totally fresh."
-   out=ai(prompt+uniq,temperature=0.82+attempt*0.04,max_output=500)
+   out=ai(prompt+uniq,temperature=0.82+attempt*0.04,max_output=500,twitter=True)
    if out and not str(out).startswith('AI error') and len(out.strip())>12:
     t=out.strip().replace('\n',' ')[:280]
     if not is_duplicate_tweet(t):
@@ -6401,9 +6412,13 @@ def show_entity_img(name,kind='wrestler',w=80):
  if p: safe_st_image(p,w,lbl,w-10 if w>50 else 70)
  else: show_img_slot(lbl,w,w-10 if w>50 else 70)
 
+def _staff_is_owner(role):
+ """Match Owner, Owner / GM, Co-Owner, etc."""
+ return 'owner' in (role or '').lower()
+
 def company_owner_photo_names(comp):
- """WCW uses two owners in STAFF — avoid combined 'A / B' string for file slugs."""
- owners=[s['name'] for s in STAFF.get(comp,[]) if (s.get('role') or '').lower()=='owner']
+ """Resolve owner portrait names — NXT Eric Bischoff is Owner/GM; WCW has two owners."""
+ owners=[s['name'] for s in STAFF.get(comp,[]) if _staff_is_owner(s.get('role'))]
  if owners: return owners
  prof=st.session_state.company_profiles.get(comp,{})
  o=(prof.get('owner') or COMPANIES.get(comp,{}).get('owner') or '').strip()
@@ -6468,6 +6483,8 @@ def render_company_home_photo_panel(comp,can_edit):
   st.caption(f'**{comp}** — logo → `assets/logos/{slug(comp)}.png` · each owner portrait uses their own name below.')
   if comp=='WCW':
    st.info('WCW has **two owners** — upload **Stephanie McMahon** and **Shane McMahon** separately (not the combined owner line).')
+  elif comp=='NXT':
+   st.caption('NXT owner portrait saves as `assets/owners/eric_bischoff.png` (Eric Bischoff — Owner/GM).')
   c1,c2=st.columns(2)
   with c1:
    st.markdown('**Logo preview**')
@@ -8469,8 +8486,8 @@ elif page=='Twitter':
  with nav_col:
   st.markdown('**Where to go:** **Timeline** = read feed · **Create Post** = one tweet · **Threads** = replies · **Buzz** = heat · **Auto Waves** = bulk')
  with ai_col:
-  tw_ai_on=should_use_openai_ai()
-  st.session_state.twitter_force_ai=st.toggle('AI generation',value=st.session_state.get('twitter_force_ai',True) and tw_ai_on,key='tw_ai_toggle',disabled=not tw_ai_on,help='Free mode uses procedural tweets only')
+  tw_ai_on=openai_key_available()
+  st.session_state.twitter_force_ai=st.toggle('AI generation',value=st.session_state.get('twitter_force_ai',True) and tw_ai_on,key='tw_ai_toggle',disabled=not tw_ai_on,help='Uses OpenAI when a key is set — works even in free built-in mode for other pages')
  with uniq_col:
   st.metric('Unique lines saved',len(st.session_state.get('twitter_text_hashes',set())))
  st.markdown('<div class="tw-stat-row">',unsafe_allow_html=True)
@@ -8482,13 +8499,17 @@ elif page=='Twitter':
  s5.metric('Drama flags',tw_stats['drama'])
  s6.metric('AI',('On' if twitter_ai_enabled() else 'Off'))
  st.markdown('</div>',unsafe_allow_html=True)
- if builtin_ai_env_on() or not should_use_openai_ai():
-  st.success('**Free mode** — procedural tweets (unique, no OpenAI).')
- elif not has_ai:
-  st.warning('Add `OPENAI_API_KEY` in `.env` for AI tweets — procedural tweets still work and never repeat.')
+ if not has_ai:
+  st.warning('Add `OPENAI_API_KEY` in `.env` or Streamlit secrets for AI tweets — procedural tweets still work and never repeat.')
   render_openai_key_helper()
+ elif twitter_ai_enabled():
+  st.success('**Twitter AI on** — ChatGPT writes posts when you tap Generate.')
+ elif builtin_ai_env_on():
+  st.caption('**Free mode** for scripts/podcasts — Twitter can still use AI when the toggle above is on and a key is set.')
  elif not st.session_state.get('twitter_force_ai',True):
   st.caption('AI toggle is off — using procedural variety only.')
+ else:
+  st.caption('Procedural tweets active — turn on **AI generation** above for ChatGPT posts.')
  with st.expander('Universe context',expanded=False):
   st.write(f"**Last show:** {live_preview['last_show']}")
   st.write(f"**Upcoming:** {live_preview['upcoming']}")
@@ -8599,15 +8620,15 @@ elif page=='Twitter':
      if not post: st.error('Reply failed.'); st.stop()
     else:
      text=generate_poster_tweet(w,None,comp,typ,tw_topic,tw_tone,mode,mention,'',force_options=False,parent_post=parent,reply_style=reply_style)
-     extra=build_tweet_extra(n,comp,w,eff,tw_topic,tw_tone,mode,ai_generated=bool(get_openai_api_key()))
+     extra=build_tweet_extra(n,comp,w,eff,tw_topic,tw_tone,mode,ai_generated=twitter_ai_enabled())
      post=make_twitter_post(comp,'wrestler',n,handle,role,typ,text,mention,extra)
    elif staff:
     if parent and mode in ('reply','quote'):
      post=twitter_post_reply(comp,n,None,staff,parent,reply_style,tw_topic,tw_tone,as_quote=(mode=='quote'))
      if not post: st.error('Reply failed.'); st.stop()
     else:
-     text=generate_poster_tweet(None,staff,comp,typ,tw_topic,tw_tone,mode,mention,'',force_options=False,parent_post=parent,reply_style=reply_style) if mode!='original' or tw_topic!='Wrestling Story' else staff_tweet(staff,comp,typ,mention=mention)
-     post=make_twitter_post(comp,'staff',n,handle,role,typ,text,mention,{'ai_generated':bool(get_openai_api_key()),'effects':eff,'topic':tw_topic,'tone':tw_tone,'tweet_mode':mode,'wrestler_obj':None,'reply_to_id':parent['id'] if parent else None})
+     text=generate_poster_tweet(None,staff,comp,typ,tw_topic,tw_tone,mode,mention,'',force_options=False,parent_post=parent,reply_style=reply_style)
+     post=make_twitter_post(comp,'staff',n,handle,role,typ,text,mention,{'ai_generated':twitter_ai_enabled(),'effects':eff,'topic':tw_topic,'tone':tw_tone,'tweet_mode':mode,'wrestler_obj':None,'reply_to_id':parent['id'] if parent else None})
    else: st.error('Select a valid poster.'); st.stop()
    st.session_state.twitter_posts.insert(0,post); update_rank({n:'Twitter activity.'}); st.toast('Tweet posted — check Timeline.'); st.rerun()
   if g2.button('Save manual',key='tw_man',disabled=not tw_edit or (not is_admin() and p_co not in allowed_cos)):
@@ -9629,13 +9650,15 @@ elif page=='Character Editor':
     render_long_markdown(char_profile(n),'Profile',expanded=True)
 elif page=='Picture Manager':
  render_page_shell('Picture Manager',subtitle='Upload wrestler, belt, logo, and owner images — placeholders only, no third-party logos.',show_meter=False)
+ ensure_selector_css()
  for folder in picture_folder_map().values(): Path(folder).mkdir(parents=True,exist_ok=True)
  kind=st.selectbox('Image type',['wrestler','owner','gm','commentator','podcast host','logo','banner','championship belt'],key='pic_kind')
  pic_comp=None; target=None
  if kind in ('logo','banner'):
   pic_comp=st.selectbox('Company',PLAYABLE,key='pic_co'); target=pic_comp
  elif kind=='championship belt':
-  pic_comp=brand_tabs('Company',key='picbeltco'); target=st.selectbox('Championship title',COMPANIES[pic_comp]['titles'],key=f'pic_belt_title_{pic_comp}')
+  pic_comp=brand_tabs('Company',key='picbeltco')
+  target=st.selectbox('Championship title',COMPANIES[pic_comp]['titles'],key=f'pic_belt_title_{pic_comp}')
   st.caption(f'Saves as: assets/belts/{belt_file_slug(pic_comp,target)}.png')
  elif kind=='owner':
   pic_comp=brand_tabs('Company',key='picbrand_owner')
@@ -9651,29 +9674,33 @@ elif page=='Picture Manager':
   st.caption(f'Saves as: assets/gm/{slug(target)}.png' if target else 'Set GM name on Company Home first.')
  else:
   pic_comp=brand_tabs('Company',key='picbrand2')
-  if kind=='wrestler': target=clean_name_selector('Wrestler / tag team',f'pic_wrest_{pic_comp}',company_filter=True,type_filter=True,default_company=pic_comp,default_entity='All')
+  if kind=='wrestler':
+   target=clean_name_selector('Wrestler / tag team',f'pic_wrest_{pic_comp}',options=clean_name_pool(pic_comp,'All'),company=pic_comp,company_filter=False,type_filter=False,default_company=pic_comp,show_search=True,label_search='Search wrestler or tag team')
   elif kind=='podcast host':
    ensure_nxt_unfiltered_hosts()
    target=st.selectbox('Podcast Host',opts_podcast_hosts('NXT'),key='pic_ph')
-  else: target=clean_name_selector('Staff',f'pic_staff_{pic_comp}',company=pic_comp,entity_type='Staff',default_company=pic_comp)
- if kind=='championship belt':
-  show_belt_img(pic_comp,target,150)
- elif kind in ('logo','banner'):
-  show_entity_img(pic_comp,kind,140)
- else:
-  img_kind='podcast_host' if kind=='podcast host' else (kind if kind!='wrestler' else 'wrestler')
-  show_entity_img(target,img_kind,140)
- f=st.file_uploader('Upload image (png/jpg/jpeg/webp)',type=['png','jpg','jpeg','webp'],key=f'pic_upload_{pic_comp}_{kind}')
- url=st.text_input('Optional image URL','',key=f'pic_url_{pic_comp}_{kind}')
- if st.button('Save Picture',key=f'pic_save_{pic_comp}_{kind}'):
-  if kind in ('owner','gm','wrestler','commentator','podcast host') and not (target or '').strip():
-   st.error('Select a person before saving.')
-  elif kind=='championship belt' and not target:
-   st.error('Select a championship title before saving.')
   else:
-   ok,msg=save_picture_asset(kind,pic_comp,target,f=f,url=url)
-   if ok: st.success(msg); st.rerun()
-   else: st.error(msg)
+   target=clean_name_selector('Staff',f'pic_staff_{pic_comp}',company=pic_comp,entity_type='Staff',default_company=pic_comp,company_filter=False,type_filter=False)
+ with st.container(border=True):
+  st.caption('Preview & upload')
+  if kind=='championship belt':
+   show_belt_img(pic_comp,target,150)
+  elif kind in ('logo','banner'):
+   show_entity_img(pic_comp,kind,140)
+  else:
+   img_kind='podcast_host' if kind=='podcast host' else (kind if kind!='wrestler' else 'wrestler')
+   show_entity_img(target,img_kind,140)
+  f=st.file_uploader('Upload image (png/jpg/jpeg/webp)',type=['png','jpg','jpeg','webp'],key=f'pic_upload_{pic_comp}_{kind}')
+  url=st.text_input('Optional image URL','',key=f'pic_url_{pic_comp}_{kind}')
+  if st.button('Save Picture',key=f'pic_save_{pic_comp}_{kind}',type='primary'):
+   if kind in ('owner','gm','wrestler','commentator','podcast host') and not (target or '').strip():
+    st.error('Select a person before saving.')
+   elif kind=='championship belt' and not target:
+    st.error('Select a championship title before saving.')
+   else:
+    ok,msg=save_picture_asset(kind,pic_comp,target,f=f,url=url)
+    if ok: st.success(msg); st.rerun()
+    else: st.error(msg)
  with bfg_card('Belt filename reference'):
   for comp in PLAYABLE:
    st.write(f'**{comp}**')

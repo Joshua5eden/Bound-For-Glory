@@ -34,15 +34,19 @@ Copy `.env.example` to `.env`:
 - **`BFG_BUILTIN_AI_ONLY=true`** (default) — no OpenAI billing; built-in scripts + Edge TTS
 - Set **`OPENAI_API_KEY`** and `BFG_BUILTIN_AI_ONLY=false` if you want ChatGPT scripts/voices
 
-### Multiplayer (optional)
+### Multiplayer / Supabase (optional)
 
-Create `.streamlit/secrets.toml` (never commit it):
+1. In Supabase SQL Editor, run `scripts/supabase_game_saves.sql`.
+2. Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`:
 
 ```toml
-DATABASE_URL = "postgresql://..."
+SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
+SUPABASE_KEY = "your-service-role-key"
 ```
 
-Without a database, solo play and local JSON saves still work.
+Saves use `game_saves` keyed by `session_id + company + save_type + save_key` so NXT, SmackDown, and WCW never overwrite each other.
+
+Without Supabase secrets, the app runs in **local testing mode** (JSON/SQLite on this server).
 
 ### Podcast audio (NXT Unfiltered)
 

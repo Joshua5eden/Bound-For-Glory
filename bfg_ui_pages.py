@@ -30,8 +30,7 @@ def _h():
 
 def render_game_intro():
     h = _h()
-    if not h.database_url_configured():
-        st.warning('Local mode is testing only. True multiplayer requires a shared database (Supabase, Neon, Firebase, etc.) via Streamlit secrets — do not hardcode API keys.')
+    h.render_storage_status_banner('page')
     autosave.render_autosave_indicator('intro_as')
     st.markdown('<div class="game-title">BOUND FOR GLORY</div>', unsafe_allow_html=True)
     st.markdown('<div class="game-title-sm">GM MODE</div>', unsafe_allow_html=True)
@@ -61,7 +60,7 @@ Money matters — but it should follow great stories and completed objectives.
         st.session_state.gate_screen = 'login'
         st.session_state.gate_login_tab = 0
         st.rerun()
-    if c2.button('Join Private Game', use_container_width=True, key='gate_join'):
+    if c2.button('Join Private Game', type='primary', use_container_width=True, key='gate_join'):
         st.session_state.gate_screen = 'login'
         st.session_state.gate_login_tab = 1
         st.rerun()
