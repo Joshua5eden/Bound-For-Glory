@@ -18,6 +18,7 @@ MODULES = [
     'bfg_crisis.py',
     'bfg_show_quality.py',
     'bfg_twitter_recruit.py',
+    'bfg_name_change.py',
 ]
 
 

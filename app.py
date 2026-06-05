@@ -42,6 +42,7 @@ import bfg_storylines as storylines
 import bfg_sponsor_objectives as sponsor_obj
 import bfg_autosave as autosave
 import bfg_ui_pages as ui_pages
+import bfg_name_change as namechg
 
 def find_ffmpeg():
  for cand in [shutil.which('ffmpeg'),'/usr/local/bin/ffmpeg','/opt/homebrew/bin/ffmpeg','/usr/bin/ffmpeg']:
@@ -542,7 +543,7 @@ FILMING_TEMPLATES={
 def W(n,c,d,o=80,a='N',s=500000):
  loc=HOMETOWNS.get(n,'') or 'Unknown'
  sy=2026
- return {'name':n,'company':c,'division':d,'overall':int(o),'alignment':a,'salary':int(s),'status':'Active','popularity':min(100,int(o)),'momentum':55,'morale':70,'stamina':85,'controversy_risk':20,'fan_support':min(100,int(o)),'locker_room_reputation':55,'sponsor_trust':60,'debut_status':'Debuted','debut_week':None,'debut_show':'','debut_company':c,'debut_segment':'','debut_type':'','debut_rating':0,'last_booked_week':None,'weeks_since_debut':0,'weeks_not_used_after_debut':0,'from_location':loc,'hometown':loc,'contract_length_years':3,'contract_start_year':sy,'contract_start_week':0,'contract_expiration_year':sy+3,'contract_expiration_week':0,'contract_weeks_remaining':156,'contract_weeks_left':156,'contract_years_remaining':3,'contract_status':'Active','renewal_status':'Not Started','salary_demand':int(s*1.1),'contract_demand':'Standard deal','contract_morale_impact':0,'free_agency_eligible':False,'previous_company':'','fa_reason':'','negotiation_offer_salary':0,'negotiation_offer_years':0,'negotiation_signing_bonus':0,'renewal_chance':70,'wins':0,'losses':0,'draws':0,'singles_wins':0,'singles_losses':0,'tag_wins':0,'tag_losses':0,'title_wins':0,'title_losses':0,'streak':'','last_result':'None','power_score':0,'rank':None,'last_rank':None,'rank_reason':'Initial ranking','image_path':'','rivalry_heat':0,'twitter_buzz':0,'injury':False,'ple_boost':0,'fan_investment':50,'last_show_boost':0,'story_grade_boost':0,'tag_team_affiliation':'','political_outspoken':random.random()<.12}
+ return {'wrestler_id':'','name':n,'ring_name':n,'real_name':'','nickname':'','gimmick_name':'','company':c,'division':d,'overall':int(o),'alignment':a,'salary':int(s),'status':'Active','popularity':min(100,int(o)),'momentum':55,'morale':70,'stamina':85,'controversy_risk':20,'fan_support':min(100,int(o)),'locker_room_reputation':55,'sponsor_trust':60,'debut_status':'Debuted','debut_week':None,'debut_show':'','debut_company':c,'debut_segment':'','debut_type':'','debut_rating':0,'last_booked_week':None,'weeks_since_debut':0,'weeks_not_used_after_debut':0,'from_location':loc,'hometown':loc,'contract_length_years':3,'contract_start_year':sy,'contract_start_week':0,'contract_expiration_year':sy+3,'contract_expiration_week':0,'contract_weeks_remaining':156,'contract_weeks_left':156,'contract_years_remaining':3,'contract_status':'Active','renewal_status':'Not Started','salary_demand':int(s*1.1),'contract_demand':'Standard deal','contract_morale_impact':0,'free_agency_eligible':False,'previous_company':'','fa_reason':'','negotiation_offer_salary':0,'negotiation_offer_years':0,'negotiation_signing_bonus':0,'renewal_chance':70,'wins':0,'losses':0,'draws':0,'singles_wins':0,'singles_losses':0,'tag_wins':0,'tag_losses':0,'title_wins':0,'title_losses':0,'streak':'','last_result':'None','power_score':0,'rank':None,'last_rank':None,'rank_reason':'Initial ranking','image_path':'','rivalry_heat':0,'twitter_buzz':0,'injury':False,'ple_boost':0,'fan_investment':50,'last_show_boost':0,'story_grade_boost':0,'tag_team_affiliation':'','political_outspoken':random.random()<.12}
 
 ROSTER=[]
 for x in [('CM Punk',94,'N',3000000),('Shinsuke Nakamura',94,'F',2000000),('Seth Rollins',95,'N',5000000),('Gunther',94,'H',2000000),('Roman Reigns',96,'N',5000000),('AJ Styles',94,'F',2000000),('John Cena',94,'F',5000000),('Raven',97,'N',3000000),('Kevin Owens',93,'N',2000000),('Sami Zayn',92,'F',2000000),('Jacob Fatu',92,'N',950000),('Christian Rose',96,'N',7000000),('Brock Lesnar',95,'H',3000000)]: ROSTER.append(W(x[0],'NXT','NXT Crown Jewels Title',x[1],x[2],x[3]))
@@ -1262,7 +1263,14 @@ def show_img(n,w=80):
 def rec(w): return f"{w.get('wins',0)}-{w.get('losses',0)}-{w.get('draws',0)}"
 def align(a): return {'F':'Face','H':'Heel','N':'Neutral'}.get(a,a)
 def roster(company=None): return [w for w in st.session_state.roster if not company or w['company']==company]
-def find(name): return next((w for w in st.session_state.roster if w['name']==name),None)
+def find(name):
+ n=(name or '').strip()
+ if not n: return None
+ return next((w for w in st.session_state.roster if w.get('name')==n),None)
+def find_by_id(wid):
+ return namechg.find_by_wrestler_id(st.session_state.roster,wid)
+def ensure_wrestler_ids():
+ namechg.ensure_wrestler_ids(st.session_state.roster)
 def opts(company=None): return [w['name'] for w in sorted(roster(company),key=lambda x:x['name'].lower())]
 
 def opts_singles(company):
@@ -2361,6 +2369,7 @@ def load_universe_from_disk():
   book_show.migrate_weekly_history_to_archive()
  except Exception:
   pass
+ ensure_wrestler_ids()
  st.session_state._universe_loaded=True
 
 def sync_session_from_storage(light=False):
@@ -2432,7 +2441,7 @@ def save_universe(data=None):
   raise
 
 def _universe_save_keys():
- return ['roster','champions','title_prestige','champion_meta','champion_history','title_defense_history','team_profiles','factions','bank','week','month','year','character_bible','staff_character_bible','company_lore','company_profiles','company_budgets','company_finance','finance_ledger','show_finance_reports','weekly_history','saved_show','booking_mode','ai_booked_show','show_user_edited','long_story_draft','book_show_drafts','book_show_archive','last_story_analysis','last_grade','story_parse','twitter_posts','schedule_calendar','calendar_locked','calendar_ai_notes','news_feed','random_event_history','storyline_flags','storylines','sponsor_objectives','twitter_drama','power_rankings','previous_power_rankings','power_ranking_history','yearly_attractions','attractions_locked','attraction_year','attraction_history','departed','staff','appearance_history','trade_history','rivalries','test_event_preview','tag_team_overrides','custom_tag_teams','roster_show_staff','breakup_history','former_tag_teams','film_projects','logistics_reports','cameo_library','debut_history','debut_warnings','rankings_include_not_debuted','confirmed_story_debuts','free_agency_pool','negotiation_history','contract_warnings','exclusive_activity_history','exclusive_generated_ideas','exclusive_violations','nxt_unfiltered_hosts','nxt_unfiltered_episodes','nxt_unfiltered_draft','last_nxt_unfiltered','podcast_hosts_booking_enabled','pending_trades','money_meter_flash','finance_opening_applied','weekly_performance_index','company_crisis','bidding_wars','brand_loyalty_history','descriptor_recent','twitter_recruitment_history','twitter_manual_gm_response','game_name','player_assignments','week_progress']
+ return ['roster','wrestler_name_history','champions','title_prestige','champion_meta','champion_history','title_defense_history','team_profiles','factions','bank','week','month','year','character_bible','staff_character_bible','company_lore','company_profiles','company_budgets','company_finance','finance_ledger','show_finance_reports','weekly_history','saved_show','booking_mode','ai_booked_show','show_user_edited','long_story_draft','book_show_drafts','book_show_archive','last_story_analysis','last_grade','story_parse','twitter_posts','schedule_calendar','calendar_locked','calendar_ai_notes','news_feed','random_event_history','storyline_flags','storylines','sponsor_objectives','twitter_drama','power_rankings','previous_power_rankings','power_ranking_history','yearly_attractions','attractions_locked','attraction_year','attraction_history','departed','staff','appearance_history','trade_history','rivalries','test_event_preview','tag_team_overrides','custom_tag_teams','roster_show_staff','breakup_history','former_tag_teams','film_projects','logistics_reports','cameo_library','debut_history','debut_warnings','rankings_include_not_debuted','confirmed_story_debuts','free_agency_pool','negotiation_history','contract_warnings','exclusive_activity_history','exclusive_generated_ideas','exclusive_violations','nxt_unfiltered_hosts','nxt_unfiltered_episodes','nxt_unfiltered_draft','last_nxt_unfiltered','podcast_hosts_booking_enabled','pending_trades','money_meter_flash','finance_opening_applied','weekly_performance_index','company_crisis','bidding_wars','brand_loyalty_history','descriptor_recent','twitter_recruitment_history','twitter_manual_gm_response','game_name','player_assignments','week_progress']
 
 def load_universe():
  load_universe_from_disk()
@@ -6129,6 +6138,78 @@ def filter_roster_list(data,search,div_f,align_f,status_f,champs_only,comp,debut
   out=[w for w in out if w['name'] in ch]
  return out
 
+def name_change_reactions(old_name,new_name,w,reason):
+ """Major name change — optional Twitter, Dirt Sheet, and storyline reactions."""
+ comp=w.get('company','NXT')
+ reason_s=(reason or 'character rebrand').strip()
+ tw_txt=f"{old_name} is now going by **{new_name}** on {comp}."
+ if reason_s: tw_txt+=f" ({reason_s[:90]})"
+ staff=next((s for s in st.session_state.staff.get(comp,[]) if 'Official' in (s.get('role') or '')),None)
+ if not staff:
+  staff=next((s for s in STAFF.get(comp,[]) if 'Official' in (s.get('role') or '')),None)
+ if staff:
+  make_twitter_post(comp,'staff',staff['name'],staff['handle'],staff['role'],'Name Change Announcement',tw_txt.replace('**',''),'',{'ai_generated':twitter_ai_enabled(),'topic':'Wrestling Story','tone':'corporate','effects':{'buzz':(4,9)}})
+ st.session_state.news_feed.insert(0,f"Dirt Sheet: {old_name} → {new_name} on {comp}. {(reason_s or 'The rebrand fits current story direction.')[:160]}")
+ storylines.ensure_storyline_state()
+ tagged=False
+ for s in st.session_state.storylines:
+  if s.get('company')!=comp or s.get('status') in ('Completed','Dropped'): continue
+  wr=s.get('wrestlers') or []
+  if old_name in wr or new_name in wr or old_name in (s.get('name') or ''):
+   storylines.add_storyline_beat(s,f"Name change: {old_name} → {new_name}. {reason_s[:120]}")
+   s['notes']=((s.get('notes') or '')+f"\nWeek {st.session_state.week}: Name change to {new_name}.").strip()[:800]
+   tagged=True; break
+ if not tagged:
+  st.session_state.storyline_flags.insert(0,{'company':comp,'flag':f'Name change — {old_name} is now {new_name}','week':st.session_state.week,'wrestler_id':w.get('wrestler_id','')})
+ w['popularity']=min(100,int(w.get('popularity',50))+random.randint(1,4))
+ w['morale']=min(100,int(w.get('morale',50))+random.randint(0,3))
+ w['twitter_buzz']=min(100,int(w.get('twitter_buzz',0))+random.randint(3,10))
+
+def render_name_change_panel(comp,can_edit):
+ """Edit display / ring name — keeps wrestler_id; updates universe-wide."""
+ ensure_wrestler_ids()
+ pool=sorted([w['name'] for w in roster(comp)],key=str.lower)
+ if not pool:
+  st.info('No wrestlers on this brand to rename.')
+  return
+ with st.expander('Edit Name / Ring Name',expanded=bool(st.session_state.get('name_edit_open'))):
+  st.warning('This keeps the same **wrestler_id** and updates the wrestler everywhere. It will **not** create a duplicate.')
+  pick=st.session_state.get('name_edit_pick') or pool[0]
+  if pick not in pool: pick=pool[0]
+  sel=clean_name_selector('Wrestler',f'name_edit_pick_{comp}',options=pool,current=pick,company=comp,entity_type='Wrestler',default_company=comp,show_search=True,label_select='Select wrestler')
+  w=find(sel)
+  if not w: st.error('Wrestler not found.'); return
+  wid=w.get('wrestler_id','')
+  st.caption(f"**wrestler_id:** `{wid}` · **Current display name:** {w.get('name','')}")
+  c1,c2=st.columns(2)
+  with c1:
+   new_name=st.text_input('New display / ring name',w.get('name',''),key=f'nc_new_{wid}')
+   real_name=st.text_input('Real name (optional)',w.get('real_name',''),key=f'nc_real_{wid}')
+   nickname=st.text_input('Nickname (optional)',w.get('nickname',''),key=f'nc_nick_{wid}')
+  with c2:
+   gimmick=st.text_input('Gimmick name (optional)',w.get('gimmick_name',''),key=f'nc_gimmick_{wid}')
+   reason=st.text_area('Name change reason',key=f'nc_reason_{wid}',placeholder='Hollywood gimmick change after documentary deal…',height=80)
+   minor=st.checkbox('Minor typo fix (silent — no Twitter/Dirt Sheet/storyline reaction)',key=f'nc_minor_{wid}')
+  hist=namechg.name_history_for(wid,st.session_state.get('wrestler_name_history',[]))
+  if hist:
+   with st.expander(f'Name history ({len(hist)})',expanded=False):
+    for h in hist[:8]:
+     st.markdown(f"- **{h.get('previous_name')}** → **{h.get('current_display_name')}** · Week {h.get('name_changed_week')} · {h.get('name_change_reason') or '—'}{' · typo fix' if h.get('minor_typo_fix') else ''}")
+  if not can_edit:
+   render_edit_only_notice(comp); return
+  if st.button('Apply Name Change',type='primary',key=f'nc_apply_{wid}'):
+   ok,msg=namechg.apply_wrestler_name_change(
+    st.session_state,wid,(new_name or '').strip(),
+    real_name=real_name,nickname=nickname,gimmick_name=gimmick,
+    reason=reason,minor_typo=minor,
+    changed_by=st.session_state.get('player_name','GM'),
+    tag_team_members=TAG_TEAM_MEMBERS,wcw_divisions=WCW_DIVISIONS,sd_divisions=SD_DIVISIONS,
+    post_reactions_fn=None if minor else name_change_reactions,
+   )
+   if ok:
+    touch_universe_meta(comp); save_universe(); st.session_state.pop('name_edit_open',None); st.success(msg); st.rerun()
+   else: st.error(msg)
+
 def render_wrestler_card(w,comp,div_opts,key_prefix,editable=True):
  with bfg_card(w['name']):
   c1,c2=st.columns([.22,.78])
@@ -6201,6 +6282,10 @@ def render_wrestler_card(w,comp,div_opts,key_prefix,editable=True):
       set_wrestler_debut_status(w,'Returning Soon'); st.rerun()
      if d4.button('Set On Hiatus',key=f'{key_prefix}hi_{w["name"]}',disabled=not allow):
       set_wrestler_debut_status(w,'On Hiatus'); st.rerun()
+    if editable and st.button('Edit Name / Ring Name',key=f'{key_prefix}rename_{w.get("wrestler_id",w["name"])}'):
+     st.session_state.name_edit_open=True
+     st.session_state.name_edit_pick=w['name']
+     st.rerun()
     if st.button(f'Remove {w["name"]}',key=f'{key_prefix}rem_{w["name"]}'):
      st.session_state.roster=[x for x in st.session_state.roster if x['name']!=w['name']]; st.session_state.departed.append(w['name']); update_rank(); st.rerun()
 
@@ -8283,9 +8368,10 @@ def init():
  ensure_data_dirs()
  if 'roster' not in st.session_state:
   st.session_state.roster=[dict(w) for w in ROSTER if w['name'] not in REMOVED_WRESTLERS|REMOVED_TAG_TEAMS]
- defaults={'champions':json.loads(json.dumps(CHAMPIONS)),'title_prestige':{},'champion_meta':{},'champion_history':[],'title_defense_history':[],'bank':STARTING_BUDGET*3,'week':0,'month':1,'year':1,'weekly_history':[],'twitter_posts':[],'schedule_calendar':[],'calendar_locked':False,'calendar_ai_notes':[],'cal_lock_confirm':False,'cal_reset_confirm':False,'random_event_history':[],'news_feed':[],'power_rankings':[],'previous_power_rankings':[],'power_ranking_history':[],'character_bible':json.loads(json.dumps(CHARACTER_BIBLE)),'yearly_attractions':json.loads(json.dumps(ATTRACTIONS))[:6],'attractions_locked':False,'attraction_year':1,'attraction_history':[],'last_profit_loss':0,'last_money_generated':0,'last_money_lost':0,'last_transportation_cost':0,'last_medical_cost':0,'last_ad_money':0,'last_pledge_money':0,'last_hotel_cost':0,'last_hotel_savings':0,'last_transport_savings':0,'saved_show':None,'booking_mode':'Match Card Mode','ai_booked_show':False,'show_user_edited':False,'long_story_draft':'','book_show_drafts':{},'book_show_archive':{},'last_story_analysis':None,'departed':[],'rivalries':[],'test_event_preview':None,'company_budgets':{c:STARTING_BUDGET for c in PLAYABLE},'company_finance':{},'finance_ledger':[],'show_finance_reports':[],'factions':{'NXT':[],'SmackDown':[],'WCW':WCW_FACTIONS},'custom_tag_teams':{},'breakup_history':[],'former_tag_teams':{c:[] for c in PLAYABLE},'film_projects':[],'logistics_reports':[],'cameo_library':[],'last_cameo':None,'team_profiles':{},'debut_history':[],'debut_warnings':[],'rankings_include_not_debuted':False,'confirmed_story_debuts':[],'free_agency_pool':[],'negotiation_history':[],'contract_warnings':[],'exclusive_activity_history':[],'exclusive_generated_ideas':[],'exclusive_violations':[],'nxt_unfiltered_hosts':json.loads(json.dumps(_default_nxt_unfiltered_hosts())),'nxt_unfiltered_episodes':[],'nxt_unfiltered_draft':{},'last_nxt_unfiltered':None,'podcast_hosts_booking_enabled':False,'week_progress':default_week_progress(),'player_assignments':{c:'' for c in PLAYABLE}, 'pending_trades':[],'logged_in':False,'session_id':'','game_name':'','invite_code':'','nxt_uf_voice_mode':'free_edge','nxt_uf_premium_cost_ok':False,'money_meter_flash':[],'finance_opening_applied':False,'weekly_performance_index':{},'company_crisis':{c:crisis.default_crisis_rec() for c in PLAYABLE},'bidding_wars':[],'brand_loyalty_history':[],'descriptor_recent':[], 'twitter_recruitment_history':[],'twitter_manual_gm_response':False,'storylines':[],'sponsor_objectives':[],'gate_screen':'intro'}
+ defaults={'champions':json.loads(json.dumps(CHAMPIONS)),'title_prestige':{},'champion_meta':{},'champion_history':[],'title_defense_history':[],'bank':STARTING_BUDGET*3,'week':0,'month':1,'year':1,'weekly_history':[],'twitter_posts':[],'schedule_calendar':[],'calendar_locked':False,'calendar_ai_notes':[],'cal_lock_confirm':False,'cal_reset_confirm':False,'random_event_history':[],'news_feed':[],'power_rankings':[],'previous_power_rankings':[],'power_ranking_history':[],'character_bible':json.loads(json.dumps(CHARACTER_BIBLE)),'yearly_attractions':json.loads(json.dumps(ATTRACTIONS))[:6],'attractions_locked':False,'attraction_year':1,'attraction_history':[],'last_profit_loss':0,'last_money_generated':0,'last_money_lost':0,'last_transportation_cost':0,'last_medical_cost':0,'last_ad_money':0,'last_pledge_money':0,'last_hotel_cost':0,'last_hotel_savings':0,'last_transport_savings':0,'saved_show':None,'booking_mode':'Match Card Mode','ai_booked_show':False,'show_user_edited':False,'long_story_draft':'','book_show_drafts':{},'book_show_archive':{},'last_story_analysis':None,'departed':[],'rivalries':[],'test_event_preview':None,'company_budgets':{c:STARTING_BUDGET for c in PLAYABLE},'company_finance':{},'finance_ledger':[],'show_finance_reports':[],'factions':{'NXT':[],'SmackDown':[],'WCW':WCW_FACTIONS},'custom_tag_teams':{},'breakup_history':[],'former_tag_teams':{c:[] for c in PLAYABLE},'film_projects':[],'logistics_reports':[],'cameo_library':[],'last_cameo':None,'team_profiles':{},'debut_history':[],'debut_warnings':[],'rankings_include_not_debuted':False,'confirmed_story_debuts':[],'free_agency_pool':[],'negotiation_history':[],'contract_warnings':[],'exclusive_activity_history':[],'exclusive_generated_ideas':[],'exclusive_violations':[],'nxt_unfiltered_hosts':json.loads(json.dumps(_default_nxt_unfiltered_hosts())),'nxt_unfiltered_episodes':[],'nxt_unfiltered_draft':{},'last_nxt_unfiltered':None,'podcast_hosts_booking_enabled':False,'week_progress':default_week_progress(),'player_assignments':{c:'' for c in PLAYABLE}, 'pending_trades':[],'logged_in':False,'session_id':'','game_name':'','invite_code':'','nxt_uf_voice_mode':'free_edge','nxt_uf_premium_cost_ok':False,'money_meter_flash':[],'finance_opening_applied':False,'weekly_performance_index':{},'company_crisis':{c:crisis.default_crisis_rec() for c in PLAYABLE},'bidding_wars':[],'brand_loyalty_history':[],'descriptor_recent':[], 'twitter_recruitment_history':[],'twitter_manual_gm_response':False,'storylines':[],'sponsor_objectives':[],'wrestler_name_history':[],'gate_screen':'intro'}
  for k,v in defaults.items():
   if k not in st.session_state: st.session_state[k]=v
+ ensure_wrestler_ids()
  if not st.session_state.power_rankings: update_rank()
 
 def main():
@@ -9365,6 +9451,7 @@ elif page=='Roster':
  pb1,pb2,pb3,pb4=st.columns(4)
  pb1.metric('Starting Budget',money(fin['starting_budget'])); pb2.metric('Total Payroll',money(pay)); pb3.metric('Current Budget',money(rem)); pb4.metric('Singles on Payroll',len(payroll_wrestlers(comp)))
  st.caption('Payroll counts individual wrestlers only (tag team unit salaries are sums of member contracts).')
+ render_name_change_panel(comp,can_edit_company(comp))
  div_opts=sorted(set(['Guest Star','Roster']+COMPANIES[comp]['titles']+[w['division'] for w in roster(comp)]))
  st.session_state.roster_show_staff=st.checkbox('Show staff section',st.session_state.get('roster_show_staff',True),key='rost_staff_toggle')
  with st.spinner(f'Loading {comp} roster…'):

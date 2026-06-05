@@ -197,6 +197,7 @@ def build_save_rows(session_id, payload, week_state=None, pending_trades=None):
    'debut_warnings': payload.get('debut_warnings', []),
    'confirmed_story_debuts': payload.get('confirmed_story_debuts', []),
    'tag_team_overrides': payload.get('tag_team_overrides', {}),
+   'wrestler_name_history': payload.get('wrestler_name_history', []),
    'custom_tag_teams': payload.get('custom_tag_teams', {}),
    'roster_show_staff': payload.get('roster_show_staff', {}),
    'breakup_history': payload.get('breakup_history', []),
