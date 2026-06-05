@@ -22,6 +22,7 @@ def load_project_env():
 load_project_env()
 
 import bfg_sessions as mp
+import bfg_supabase as sb
 import bfg_crisis as crisis
 import bfg_show_quality as showq
 import bfg_twitter_recruit as twrecruit
@@ -1196,14 +1197,36 @@ def normalize_cameo_record(rec):
   elif r.get(flat) is None: r[flat]=default
  return r
 def slug(n): return re.sub(r'[^a-z0-9_]','',n.lower().replace(' ','_').replace("'",'').replace("\u2019",''))
+
+def image_file_ok(path):
+ """Skip empty/corrupt files so st.image never raises PIL.UnidentifiedImageError."""
+ try:
+  p=Path(path)
+  if not p.is_file() or p.stat().st_size<32: return False
+  from PIL import Image
+  with Image.open(p) as im:
+   im.verify()
+  return True
+ except Exception:
+  return False
+
+def safe_st_image(path,w=80,fallback_label='IMG',fallback_h=None):
+ if path and image_file_ok(path):
+  try:
+   st.image(path,width=w)
+   return
+  except Exception:
+   pass
+ show_img_slot(fallback_label,w,fallback_h or (w-10 if w>50 else 70))
+
 def img_path(n):
  for e in ['.png','.jpg','.jpeg','.webp']:
   p=Path('assets/wrestlers')/f'{slug(n)}{e}'
-  if p.exists(): return str(p)
+  if p.exists() and image_file_ok(p): return str(p)
  return ''
 def show_img(n,w=80):
  p=img_path(n)
- if p: st.image(p,width=w)
+ if p: safe_st_image(p,w,'IMG')
  else: st.markdown(f"<div style='width:{w}px;height:{w}px;border:1px dashed #b026ff;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#c9b6e8;background:#151520'>IMG</div>",unsafe_allow_html=True)
 def rec(w): return f"{w.get('wins',0)}-{w.get('losses',0)}-{w.get('draws',0)}"
 def align(a): return {'F':'Face','H':'Heel','N':'Neutral'}.get(a,a)
@@ -2146,6 +2169,7 @@ GM_ROLE_OPTIONS={
 }
 
 def apply_player_session(player_name,role,company,session_id='',game_name='',invite_code=''):
+ ensure_week_progress_state()
  st.session_state.logged_in=True
  st.session_state.player_name=player_name
  st.session_state.role=role
@@ -2156,14 +2180,22 @@ def apply_player_session(player_name,role,company,session_id='',game_name='',inv
  if company!='All':
   set_active_brand(company)
   st.session_state.player_assignments[company]=player_name
+  st.session_state.week_progress.setdefault(company,default_week_progress()[company])
   st.session_state.week_progress[company]['gm_player']=player_name
  else:
   for c in PLAYABLE:
    st.session_state.player_assignments[c]=st.session_state.player_assignments.get(c) or '—'
  st.session_state._universe_loaded=False
- load_universe_from_disk()
+ try:
+  load_universe_from_disk()
+ except Exception as ex:
+  st.session_state._universe_loaded=True
+  raise RuntimeError(f'Joined session but could not load save data: {ex}') from ex
  st.session_state._universe_loaded=True
- save_week_state()
+ try:
+  save_week_state()
+ except Exception:
+  pass
 
 def ensure_multiplayer_state():
  if 'logged_in' not in st.session_state: st.session_state.logged_in=False
@@ -2221,7 +2253,25 @@ def touch_universe_meta(company=None):
  st.session_state.last_updated_at=date.today().isoformat()
 
 def database_configured():
- return mp.database_url_configured() or mp.shared_storage_available()
+ return sb.supabase_configured() or mp.database_url_configured()
+
+def supabase_cloud_active():
+ return sb.supabase_configured()
+
+def render_storage_status_banner(where='sidebar'):
+ """Show Supabase connected or local testing mode."""
+ if supabase_cloud_active():
+  msg = 'Supabase connected — multiplayer saves active.'
+  if where == 'sidebar':
+   st.sidebar.success(msg)
+  else:
+   st.success(msg)
+  return
+ warn = '**Local testing mode** — saves stay on this server only. Add `SUPABASE_URL` and `SUPABASE_KEY` in Streamlit secrets for shared multiplayer.'
+ if where == 'sidebar':
+  st.sidebar.warning(warn)
+ else:
+  st.warning(warn)
 
 def load_universe_from_disk():
  root=session_storage_dir()
@@ -2230,8 +2280,12 @@ def load_universe_from_disk():
  wfile=session_week_state_file()
  pfile=session_pending_trades_file()
  sid=get_session_id()
- db_uni=mp.db_load_blob('mp_universe',sid) if sid!='local' else None
- if db_uni:
+ sb_uni=sb.load_merged_universe(sid) if sid!='local' and sb.supabase_configured() else None
+ if sb_uni:
+  for k,v in sb_uni.items():
+   if k in ('last_updated_by','last_updated_at','session_id'): continue
+   st.session_state[k]=v
+ elif (db_uni:=mp.db_load_blob('mp_universe',sid) if sid!='local' else None):
   for k,v in db_uni.items():
    if k in ('last_updated_by','last_updated_at','session_id'): continue
    st.session_state[k]=v
@@ -2246,27 +2300,29 @@ def load_universe_from_disk():
   for k,v in data.items():
    if k in ('last_updated_by','last_updated_at','session_id'): continue
    st.session_state[k]=v
- db_ws=mp.db_load_blob('mp_week_state',sid) if sid!='local' else None
- if db_ws:
-  st.session_state.week_progress=db_ws.get('companies',default_week_progress())
-  st.session_state.player_assignments=db_ws.get('player_assignments',st.session_state.get('player_assignments',{c:'' for c in PLAYABLE}))
-  if 'current_week' in db_ws: st.session_state.week=int(db_ws['current_week'])
- elif wfile.exists():
-  try:
-   ws=json.loads(wfile.read_text(encoding='utf-8'))
-  except (json.JSONDecodeError,OSError):
-   ws={}
-  st.session_state.week_progress=ws.get('companies',default_week_progress())
-  st.session_state.player_assignments=ws.get('player_assignments',st.session_state.player_assignments)
-  if 'current_week' in ws: st.session_state.week=int(ws['current_week'])
- db_tr=mp.db_load_blob('mp_pending_trades',sid) if sid!='local' else None
- if db_tr is not None:
-  st.session_state.pending_trades=db_tr
- elif pfile.exists():
-  try:
-   st.session_state.pending_trades=json.loads(pfile.read_text(encoding='utf-8'))
-  except (json.JSONDecodeError,OSError):
-   st.session_state.pending_trades=[]
+ if not sb_uni:
+  db_ws=mp.db_load_blob('mp_week_state',sid) if sid!='local' else None
+  if db_ws:
+   st.session_state.week_progress=db_ws.get('companies',default_week_progress())
+   st.session_state.player_assignments=db_ws.get('player_assignments',st.session_state.get('player_assignments',{c:'' for c in PLAYABLE}))
+   if 'current_week' in db_ws: st.session_state.week=int(db_ws['current_week'])
+  elif wfile.exists():
+   try:
+    ws=json.loads(wfile.read_text(encoding='utf-8'))
+   except (json.JSONDecodeError,OSError):
+    ws={}
+   st.session_state.week_progress=ws.get('companies',default_week_progress())
+   st.session_state.player_assignments=ws.get('player_assignments',st.session_state.player_assignments)
+   if 'current_week' in ws: st.session_state.week=int(ws['current_week'])
+ if not sb_uni:
+  db_tr=mp.db_load_blob('mp_pending_trades',sid) if sid!='local' else None
+  if db_tr is not None:
+   st.session_state.pending_trades=db_tr
+  elif pfile.exists():
+   try:
+    st.session_state.pending_trades=json.loads(pfile.read_text(encoding='utf-8'))
+   except (json.JSONDecodeError,OSError):
+    st.session_state.pending_trades=[]
  storylines.ensure_storyline_state()
  sponsor_obj.ensure_sponsor_objectives(COMPANIES)
  try:
@@ -2285,9 +2341,17 @@ def sync_session_from_storage(light=False):
   return
  if get_session_id()=='local':
   return
+ sid=get_session_id()
+ if sb.supabase_configured():
+  lite=sb.load_light_session(sid)
+  if lite:
+   if lite.get('week_progress'): st.session_state.week_progress=lite['week_progress']
+   if lite.get('player_assignments'): st.session_state.player_assignments=lite['player_assignments']
+   if 'week' in lite: st.session_state.week=int(lite['week'])
+   if lite.get('pending_trades') is not None: st.session_state.pending_trades=lite['pending_trades']
+   return
  wfile=session_week_state_file()
  pfile=session_pending_trades_file()
- sid=get_session_id()
  db_ws=mp.db_load_blob('mp_week_state',sid)
  if db_ws:
   st.session_state.week_progress=db_ws.get('companies',st.session_state.week_progress)
@@ -2323,11 +2387,13 @@ def save_universe(data=None):
   payload['last_updated_at']=datetime.now().isoformat(timespec='seconds')
   session_universe_file().write_text(json.dumps(payload,indent=2,default=str),encoding='utf-8')
   sid=get_session_id()
-  if sid!='local':
-   mp.db_save_blob('mp_universe',sid,payload)
   save_week_state()
   save_pending_trades()
-  if get_session_id()=='local' and st.session_state.get('logged_in'):
+  if sid!='local':
+   mp.db_save_blob('mp_universe',sid,payload)
+   if sb.supabase_configured():
+    sb.sync_session_saves(sid,payload,week_state=load_week_state(),pending_trades=st.session_state.get('pending_trades',[]))
+  if get_session_id()=='local' and st.session_state.get('logged_in') and not sb.supabase_configured():
    st.session_state.mp_show_local_warning=True
   autosave.set_autosave_status('saved')
  except Exception as ex:
@@ -2468,13 +2534,42 @@ def execute_trade_transfer(rec):
  save_trade_record(rec)
  save_universe()
 
+def _render_join_private_game_form():
+ with bfg_card('Join Private Game'):
+  st.info('You need **two codes** from the host: **Invite code** (e.g. `BFG-6051`) and your **brand access code** (8 letters, e.g. `B7SUO2R8` for NXT). Do not put the invite code in both fields.')
+  invite=st.text_input('Invite code',key='mp_join_invite',placeholder='BFG-6051')
+  pname=st.text_input('Player name',key='mp_join_name',placeholder='Your GM name')
+  access=st.text_input('Brand access code',key='mp_join_access',placeholder='NXT / SmackDown / WCW / Admin code (8 characters)')
+  st.caption('Example — game **easywork**: invite `BFG-6051` · NXT `B7SUO2R8` · SmackDown `LPYRCDMN` · WCW `VAUK5RO7` · Admin `R0143DPK`')
+  if st.button('Join private game',type='primary',use_container_width=True,key='mp_join_btn'):
+   if not invite.strip() or not pname.strip() or not access.strip():
+    st.error('Enter invite code, player name, and brand access code.')
+   else:
+    info,err=mp.join_private_session(invite,pname,access)
+    if err:
+     if 'Invite code not found' in err:
+      st.error(err)
+      st.warning('This invite only works on the **same server** where the game was created (this computer, or Streamlit Cloud with Supabase). If the host created the game elsewhere, ask them to share codes from that server.')
+     elif 'Invalid access code' in err:
+      st.error(err)
+      st.warning('Use the **8-character brand code**, not the invite code. Invite goes in the first box only.')
+     else:
+      st.error(err)
+    else:
+     try:
+      apply_player_session(info['player_name'],info['role'],info['assigned_company'],session_id=info['session_id'],game_name=info['game_name'],invite_code=info['invite_code'])
+      st.session_state.pop('gate_login_tab',None)
+      st.toast(f"Joined {info.get('game_name','game')} as {info['role']}")
+      st.rerun()
+     except Exception as ex:
+      st.error(str(ex))
+
 def render_login_screen():
  mp.init_storage()
  st.markdown('<div class="game-title">BOUND FOR GLORY</div>',unsafe_allow_html=True)
  st.markdown('<div class="game-title-sm">GM MODE</div>',unsafe_allow_html=True)
  st.markdown('<div class="game-subtitle">Welcome — private friend sessions · NXT · SmackDown · WCW</div>',unsafe_allow_html=True)
- if not mp.database_url_configured():
-  st.info('**Local + SQLite mode:** private sessions save under `data/sessions/` on this server. For cloud deploys, add `DATABASE_URL` or Supabase in Streamlit secrets so every player shares the same database.')
+ render_storage_status_banner('page')
  codes=st.session_state.get('mp_created_codes')
  if codes:
   with bfg_card('Share these codes with your friends (save them now)'):
@@ -2496,37 +2591,30 @@ def render_login_screen():
   if st.button('← Back to intro',key='login_back'):
    st.session_state.gate_screen='intro'
    st.rerun()
-  tab_create,tab_join=st.tabs(['Create Private Game','Join Private Game'])
-  with tab_create:
-   with bfg_card('Create Private Game'):
-    gname=st.text_input('Game session name',key='mp_create_gname',placeholder='Joshua Universe')
-    cname=st.text_input('Your name (Admin)',key='mp_create_admin',placeholder='Joshua')
-    st.caption('Creates a private lobby. Share the invite + role codes with friends only.')
-    if st.button('Create private game',type='primary',use_container_width=True,key='mp_create_btn'):
-     if not gname.strip():
-      st.error('Enter a game session name.')
-     elif not cname.strip():
-      st.error('Enter your name.')
-     else:
-      meta=mp.create_private_session(gname.strip(),cname.strip())
-      st.session_state.mp_created_codes=meta
-      st.rerun()
-  with tab_join:
-   with bfg_card('Join Private Game'):
-    invite=st.text_input('Invite code',key='mp_join_invite',placeholder='BFG-8294')
-    pname=st.text_input('Player name',key='mp_join_name',placeholder='Your GM name')
-    access=st.text_input('Role / access code',key='mp_join_access',type='password',placeholder='Admin or NXT/SmackDown/WCW GM code')
-    st.caption('Use the invite code + the role code your host sent you.')
-    if st.button('Join private game',type='primary',use_container_width=True,key='mp_join_btn'):
-     if not invite.strip() or not pname.strip() or not access.strip():
-      st.error('Enter invite code, player name, and access code.')
-     else:
-      info,err=mp.join_private_session(invite,pname,access)
-      if err:
-       st.error(err)
+  join_first=int(st.session_state.get('gate_login_tab',0))==1
+  if join_first:
+   _render_join_private_game_form()
+   if st.button('Create a game instead',key='login_switch_create'):
+    st.session_state.gate_login_tab=0
+    st.rerun()
+  else:
+   tab_create,tab_join=st.tabs(['Create Private Game','Join Private Game'])
+   with tab_create:
+    with bfg_card('Create Private Game'):
+     gname=st.text_input('Game session name',key='mp_create_gname',placeholder='Joshua Universe')
+     cname=st.text_input('Your name (Admin)',key='mp_create_admin',placeholder='Joshua')
+     st.caption('Creates a private lobby. Share the invite + role codes with friends only.')
+     if st.button('Create private game',type='primary',use_container_width=True,key='mp_create_btn'):
+      if not gname.strip():
+       st.error('Enter a game session name.')
+      elif not cname.strip():
+       st.error('Enter your name.')
       else:
-       apply_player_session(info['player_name'],info['role'],info['assigned_company'],session_id=info['session_id'],game_name=info['game_name'],invite_code=info['invite_code'])
+       meta=mp.create_private_session(gname.strip(),cname.strip())
+       st.session_state.mp_created_codes=meta
        st.rerun()
+   with tab_join:
+    _render_join_private_game_form()
   with st.expander('Solo test mode (no invite codes)'):
    name=st.text_input('Player Name','',key='mp_login_name',placeholder='Solo GM')
    role_pick=st.selectbox('Role',list(GM_ROLE_OPTIONS.keys()),key='mp_login_role')
@@ -2561,9 +2649,7 @@ def render_multiplayer_sidebar():
   st.sidebar.markdown('<span class="overall-badge">Admin · All Brands</span>',unsafe_allow_html=True)
  else:
   st.sidebar.markdown('<span class="overall-badge">View Only 🔒</span>',unsafe_allow_html=True)
- if st.session_state.get('mp_show_local_warning') or (not database_configured() and not st.session_state.mp_db_warning_shown):
-  st.sidebar.caption('Local JSON save — shared testing only.')
-  st.session_state.mp_db_warning_shown=True
+ render_storage_status_banner('sidebar')
  if st.sidebar.button('Logout',key='mp_logout'):
   for k in ['logged_in','player_name','role','assigned_company','mp_show_local_warning','_universe_loaded','session_id','game_name','invite_code','mp_created_codes']:
    st.session_state[k]=False if k=='logged_in' else ''
@@ -6264,7 +6350,7 @@ def asset_path(kind,name):
  base={'wrestler':'assets/wrestlers','owner':'assets/owners','gm':'assets/gm','commentator':'assets/staff','podcast_host':'assets/podcast_hosts','logo':'assets/logos','banner':'assets/banners','belt':'assets/belts'}.get(kind,'assets/wrestlers')
  for e in ['.png','.jpg','.jpeg','.webp']:
   p=Path(base)/f'{slug(name)}{e}'
-  if p.exists(): return str(p)
+  if p.exists() and image_file_ok(p): return str(p)
  return ''
 
 def show_img_slot(label,w=100,h=None):
@@ -6273,20 +6359,124 @@ def show_img_slot(label,w=100,h=None):
 
 def show_belt_img(comp,title,w=130):
  p=asset_path('belt',belt_file_slug(comp,title))
- if p: st.image(p,width=w)
+ if p: safe_st_image(p,w,'Belt Image',100)
  else: show_img_slot('Belt Image',w,100)
 
 def show_champion_img(name,w=110):
  p=img_path(name) or asset_path('wrestler',name)
- if p: st.image(p,width=w)
+ if p: safe_st_image(p,w,'Champion Image',105)
  else: show_img_slot('Champion Image',w,105)
 
 def show_entity_img(name,kind='wrestler',w=80):
+ lbl={'belt':'Belt Image','wrestler':'Champion Image','logo':'Logo','owner':'Owner','gm':'GM','banner':'Banner'}.get(kind,'IMG')
+ if not name:
+  show_img_slot(lbl,w,w-10 if w>50 else 70); return
  p=asset_path(kind,name) or (img_path(name) if kind=='wrestler' else '')
- if p: st.image(p,width=w)
- else:
-  lbl={'belt':'Belt Image','wrestler':'Champion Image'}.get(kind,'IMG')
-  show_img_slot(lbl,w,w-10 if w>50 else 70)
+ if p: safe_st_image(p,w,lbl,w-10 if w>50 else 70)
+ else: show_img_slot(lbl,w,w-10 if w>50 else 70)
+
+def company_owner_photo_names(comp):
+ """WCW uses two owners in STAFF — avoid combined 'A / B' string for file slugs."""
+ owners=[s['name'] for s in STAFF.get(comp,[]) if (s.get('role') or '').lower()=='owner']
+ if owners: return owners
+ prof=st.session_state.company_profiles.get(comp,{})
+ o=(prof.get('owner') or COMPANIES.get(comp,{}).get('owner') or '').strip()
+ if not o: return []
+ if ' / ' in o: return [x.strip() for x in o.split('/') if x.strip()]
+ return [o]
+
+def show_company_owner_imgs(comp,w=110):
+ names=company_owner_photo_names(comp)
+ if not names:
+  show_img_slot('Owner Image',w,100); return
+ if len(names)==1:
+  show_entity_img(names[0],'owner',w); return
+ cols=st.columns(min(len(names),3))
+ for col,nm in zip(cols,names):
+  with col:
+   show_entity_img(nm,'owner',max(72,w-28))
+   st.caption(nm.split()[0])
+
+def picture_folder_map():
+ return {'wrestler':'assets/wrestlers','owner':'assets/owners','gm':'assets/gm','commentator':'assets/staff','podcast host':'assets/podcast_hosts','logo':'assets/logos','banner':'assets/banners','championship belt':'assets/belts'}
+
+def save_picture_asset(kind,pic_comp,target,f=None,url=''):
+ folder_map=picture_folder_map()
+ folder=folder_map.get(kind,'assets/wrestlers')
+ Path(folder).mkdir(parents=True,exist_ok=True)
+ if kind in ('logo','banner'): fname=slug(pic_comp)
+ elif kind=='championship belt': fname=belt_file_slug(pic_comp,target)
+ else: fname=slug(target or '')
+ if not fname: return False,'Pick a person or title before saving.'
+ if f:
+  try:
+   ext='.'+(f.name.split('.')[-1].lower() if getattr(f,'name',None) else 'png')
+   if ext not in ('.png','.jpg','.jpeg','.webp'): return False,'Use png, jpg, jpeg, or webp.'
+   raw=f.getvalue() if hasattr(f,'getvalue') else f.read()
+   if not raw: return False,'Upload failed — pick the image file again and retry.'
+   p=Path(folder)/f'{fname}{ext}'
+   p.write_bytes(raw)
+   if not image_file_ok(p):
+    try: p.unlink(missing_ok=True)
+    except OSError: pass
+    return False,'Upload failed — file is not a valid image. Use png, jpg, jpeg, or webp.'
+   return True,f'Image saved as {p.as_posix()}'
+  except OSError as ex:
+   return False,f'Could not write file: {ex}'
+  except Exception as ex:
+   return False,f'Upload error: {ex}'
+ if url and url.strip():
+  try:
+   import urllib.request
+   ext='.png' if '.png' in url.lower() else '.jpg'
+   p=Path(folder)/f'{fname}{ext}'
+   urllib.request.urlretrieve(url.strip(),p)
+   return True,f'Image downloaded to {p.as_posix()}'
+  except Exception as e:
+   return False,str(e)
+ return False,'Upload a file or provide a URL.'
+
+def render_company_home_photo_panel(comp,can_edit):
+ owner_choices=company_owner_photo_names(comp)
+ with st.expander('Manage photos (logo & owners)',expanded=False):
+  st.caption(f'**{comp}** — logo → `assets/logos/{slug(comp)}.png` · each owner portrait uses their own name below.')
+  if comp=='WCW':
+   st.info('WCW has **two owners** — upload **Stephanie McMahon** and **Shane McMahon** separately (not the combined owner line).')
+  c1,c2=st.columns(2)
+  with c1:
+   st.markdown('**Logo preview**')
+   show_entity_img(comp,'logo',100)
+   logo_f=st.file_uploader('Upload logo',type=['png','jpg','jpeg','webp'],key=f'home_logo_up_{comp}')
+  with c2:
+   st.markdown('**Owner preview**')
+   show_company_owner_imgs(comp,90)
+   if not owner_choices:
+    st.warning('No owner names found for this brand.')
+    owner_pick=None
+   else:
+    owner_pick=st.selectbox('Owner to upload',owner_choices,key=f'home_owner_pick_{comp}')
+   owner_f=st.file_uploader('Upload owner portrait',type=['png','jpg','jpeg','webp'],key=f'home_owner_up_{comp}')
+  if not can_edit:
+   st.caption('View only — you cannot upload photos for this brand.')
+   return
+  if st.button('Save home photos',key=f'home_pic_save_{comp}',type='primary'):
+   msgs=[]; ok_any=False
+   if logo_f:
+    ok,msg=save_picture_asset('logo',comp,comp,f=logo_f)
+    msgs.append(msg if ok else f'Logo: {msg}'); ok_any=ok_any or ok
+   if owner_f:
+    if not owner_pick or owner_pick=='Owner':
+     msgs.append('Owner: pick Stephanie McMahon or Shane McMahon (WCW) before uploading.')
+    else:
+     ok,msg=save_picture_asset('owner',comp,owner_pick,f=owner_f)
+     msgs.append(msg if ok else f'Owner: {msg}'); ok_any=ok_any or ok
+   if not logo_f and not owner_f:
+    st.warning('Choose a logo file and/or owner file first.')
+   else:
+    for m in msgs:
+     if 'saved' in m.lower() or 'downloaded' in m.lower(): st.success(m)
+     else: st.error(m)
+    if ok_any: st.rerun()
 
 def render_champion_card(comp,title):
  st.session_state.champions.setdefault(comp,{})
@@ -6522,24 +6712,25 @@ def render_brand_exclusives_section(comp,key_prefix,compact=False,show_suggestio
     ok_brand,warn=check_exclusive_brand(comp,act)
     st.markdown(f"<div class='gm-card'><b>{act}</b><br><span class='small-text'>Exclusive to: <b>{meta['owner']}</b> · {meta['description']}</span><br>Best for: {', '.join(meta['best_for'][:5])}<br>Revenue: {money(meta['revenue_lo'])} – {money(meta['revenue_hi'])} · Pop +{meta['pop'][0]}-{meta['pop'][1]} · Morale +{meta['morale'][0]}-{meta['morale'][1]} · Sponsor +{meta['sponsor'][0]}-{meta['sponsor'][1]} · Viewership +{meta['viewership'][0]}-{meta['viewership'][1]} · Risk: <b>{meta['risk']}</b></div>",unsafe_allow_html=True)
     if not ok_brand: st.warning(warn)
-    person=clean_name_selector('Talent',f'{key_prefix}_{slug(act)[:20]}_p',company=comp,entity_type='Wrestler',default_company=comp,label_select='Wrestler',show_search=True)
-    wk=st.number_input('Week',1,52,st.session_state.week+1,key=f'{key_prefix}_{slug(act)}_wk')
-    notes=st.text_input('Story notes',key=f'{key_prefix}_{slug(act)}_n',value='')
+    act_key=slug(act) or 'activity'
+    person=clean_name_selector('Talent',f'{key_prefix}_{comp}_{act_key}_p',company=comp,entity_type='Wrestler',default_company=comp,label_select='Wrestler',show_search=True)
+    wk=st.number_input('Week',1,52,st.session_state.week+1,key=f'{key_prefix}_{comp}_{act_key}_wk')
+    notes=st.text_input('Story notes',key=f'{key_prefix}_{comp}_{act_key}_n',value='')
     force=False
     if not ok_brand:
-     force=st.checkbox('Force cross-brand (confirm)',key=f'{key_prefix}_{slug(act)}_force')
+     force=st.checkbox('Force cross-brand (confirm)',key=f'{key_prefix}_{comp}_{act_key}_force')
     b1,b2,b3=st.columns(3)
-    if b1.button('Generate Idea',key=f'{key_prefix}_{slug(act)}_idea'):
+    if b1.button('Generate Idea',key=f'{key_prefix}_{comp}_{act_key}_idea'):
      idea=generate_exclusive_idea(comp,act,person)
      st.session_state.setdefault('exclusive_generated_ideas',[]).insert(0,{'week':st.session_state.week,'company':comp,'activity':act,'person':person,'idea':idea})
      st.info(idea)
-    if b2.button('Run Appearance',key=f'{key_prefix}_{slug(act)}_run'):
+    if b2.button('Run Appearance',key=f'{key_prefix}_{comp}_{act_key}_run'):
      success,msg=run_brand_exclusive(comp,act,person,wk,notes,force)
      if success: st.success(msg); st.rerun()
      else: st.error(msg)
-    if b3.button('Save To Calendar',key=f'{key_prefix}_{slug(act)}_cal'):
+    if b3.button('Save To Calendar',key=f'{key_prefix}_{comp}_{act_key}_cal'):
      save_exclusive_to_calendar(comp,act,person,notes); st.success('Saved to calendar notes.'); st.rerun()
-    if act=='NXT Unfiltered' and comp=='NXT' and st.button('Open NXT Unfiltered Studio',key=f'{key_prefix}_nxt_uf_studio'):
+    if act=='NXT Unfiltered' and comp=='NXT' and st.button('Open NXT Unfiltered Studio',key=f'{key_prefix}_{comp}_nxt_uf_studio'):
      d=st.session_state.setdefault('nxt_unfiltered_draft',{})
      d.update({'related_show':notes,'main_characters':person,'week':st.session_state.week+1})
      st.session_state.nav_page='NXT Unfiltered'; st.rerun()
@@ -8041,6 +8232,8 @@ def ensure_data_dirs():
  UNIVERSE_DATA_DIR.mkdir(parents=True,exist_ok=True)
  Path('data/sessions').mkdir(parents=True,exist_ok=True)
  Path('data/audio/nxt_unfiltered').mkdir(parents=True,exist_ok=True)
+ for folder in picture_folder_map().values():
+  Path(folder).mkdir(parents=True,exist_ok=True)
 
 def init():
  ensure_data_dirs()
@@ -8087,7 +8280,9 @@ def main():
 
 def register_ui_page_helpers():
  ui_pages.register_helpers(
-  database_url_configured=mp.database_url_configured,
+  database_url_configured=database_configured,
+  supabase_cloud_active=supabase_cloud_active,
+  render_storage_status_banner=render_storage_status_banner,
   bfg_card=bfg_card,
   UNIVERSE_DATA_DIR=UNIVERSE_DATA_DIR,
   sync_session_from_storage=sync_session_from_storage,
@@ -8206,8 +8401,9 @@ elif page=='Company Home':
  c1,c2,c3=st.columns([.28,.36,.36])
  with c1:
    with bfg_card('Logo / Owner'):
-    show_entity_img(comp,'logo',110); show_entity_img(prof['owner'],'owner',110)
-    st.markdown('<div class="helper-note">Upload owner and logo images in <b>Picture Manager</b>.</div>',unsafe_allow_html=True)
+    show_entity_img(comp,'logo',110)
+    show_company_owner_imgs(comp,100)
+    st.markdown('<div class="helper-note">Use <b>Manage photos</b> below for uploads · <b>Picture Manager</b> for belts & wrestlers.</div>',unsafe_allow_html=True)
  with c2:
    with bfg_card('Brand Identity'):
     st.write(f"**Colors:** {BRAND_THEMES[comp]['primary']} / {BRAND_THEMES[comp]['accent']}")
@@ -8225,6 +8421,7 @@ elif page=='Company Home':
  with bfg_card('Champions'):
   for t,v in st.session_state.champions.get(comp,{}).items(): st.write(f"**{display_title(t)}:** {v}")
  render_brand_hub_embed(comp,compact=True,key_prefix='home_hub')
+ render_company_home_photo_panel(comp,can_edit)
  render_brand_exclusives_section(comp,'home_ex',compact=False)
 elif page=='Book Show':
  _bh=book_show_helpers()
@@ -9405,24 +9602,33 @@ elif page=='Character Editor':
     render_long_markdown(char_profile(n),'Profile',expanded=True)
 elif page=='Picture Manager':
  render_page_shell('Picture Manager',subtitle='Upload wrestler, belt, logo, and owner images — placeholders only, no third-party logos.',show_meter=False)
- for folder in ['assets/wrestlers','assets/owners','assets/gm','assets/staff','assets/podcast_hosts','assets/logos','assets/banners','assets/belts']: Path(folder).mkdir(parents=True,exist_ok=True)
- kind=st.selectbox('Image type',['wrestler','owner','gm','commentator','podcast host','logo','banner','championship belt'])
- pic_comp=None
+ for folder in picture_folder_map().values(): Path(folder).mkdir(parents=True,exist_ok=True)
+ kind=st.selectbox('Image type',['wrestler','owner','gm','commentator','podcast host','logo','banner','championship belt'],key='pic_kind')
+ pic_comp=None; target=None
  if kind in ('logo','banner'):
-   pic_comp=st.selectbox('Company',PLAYABLE,key='pic_co'); target=pic_comp
+  pic_comp=st.selectbox('Company',PLAYABLE,key='pic_co'); target=pic_comp
  elif kind=='championship belt':
-   pic_comp=brand_tabs('Company',key='picbeltco'); target=st.selectbox('Championship title',COMPANIES[pic_comp]['titles'],key='pic_belt_title')
-   st.caption(f'Saves as: assets/belts/{belt_file_slug(pic_comp,target)}.png')
- elif kind in ('owner','gm'):
-   pic_comp=brand_tabs('Company',key='picbrand'); prof=st.session_state.company_profiles[pic_comp]
-   target=st.selectbox('Person',[prof.get('owner'),prof.get('gm')])
+  pic_comp=brand_tabs('Company',key='picbeltco'); target=st.selectbox('Championship title',COMPANIES[pic_comp]['titles'],key=f'pic_belt_title_{pic_comp}')
+  st.caption(f'Saves as: assets/belts/{belt_file_slug(pic_comp,target)}.png')
+ elif kind=='owner':
+  pic_comp=brand_tabs('Company',key='picbrand_owner')
+  choices=company_owner_photo_names(pic_comp)
+  if not choices: choices=[COMPANIES[pic_comp].get('owner','Owner')]
+  target=st.selectbox('Owner',choices,key=f'pic_owner_person_{pic_comp}')
+  st.caption(f'Saves as: assets/owners/{slug(target)}.png')
+ elif kind=='gm':
+  pic_comp=brand_tabs('Company',key='picbrand_gm')
+  prof=st.session_state.company_profiles.setdefault(pic_comp,dict(COMPANY_PROFILES[pic_comp]))
+  target=(prof.get('gm') or COMPANIES[pic_comp]['gm'] or '').strip()
+  st.text_input('GM',value=target,disabled=True,key=f'pic_gm_person_{pic_comp}')
+  st.caption(f'Saves as: assets/gm/{slug(target)}.png' if target else 'Set GM name on Company Home first.')
  else:
-   pic_comp=brand_tabs('Company',key='picbrand2')
-   if kind=='wrestler': target=clean_name_selector('Wrestler / tag team','pic_wrest',company_filter=True,type_filter=True,default_company=pic_comp,default_entity='All')
-   elif kind=='podcast host':
-    ensure_nxt_unfiltered_hosts()
-    target=st.selectbox('Podcast Host',opts_podcast_hosts('NXT'),key='pic_ph')
-   else: target=clean_name_selector('Staff','pic_staff',company=pic_comp,entity_type='Staff',default_company=pic_comp)
+  pic_comp=brand_tabs('Company',key='picbrand2')
+  if kind=='wrestler': target=clean_name_selector('Wrestler / tag team',f'pic_wrest_{pic_comp}',company_filter=True,type_filter=True,default_company=pic_comp,default_entity='All')
+  elif kind=='podcast host':
+   ensure_nxt_unfiltered_hosts()
+   target=st.selectbox('Podcast Host',opts_podcast_hosts('NXT'),key='pic_ph')
+  else: target=clean_name_selector('Staff',f'pic_staff_{pic_comp}',company=pic_comp,entity_type='Staff',default_company=pic_comp)
  if kind=='championship belt':
   show_belt_img(pic_comp,target,150)
  elif kind in ('logo','banner'):
@@ -9430,22 +9636,17 @@ elif page=='Picture Manager':
  else:
   img_kind='podcast_host' if kind=='podcast host' else (kind if kind!='wrestler' else 'wrestler')
   show_entity_img(target,img_kind,140)
- f=st.file_uploader('Upload image (png/jpg/jpeg/webp)',type=['png','jpg','jpeg','webp'])
- url=st.text_input('Optional image URL','')
- if st.button('Save Picture'):
-   folder_map={'wrestler':'assets/wrestlers','owner':'assets/owners','gm':'assets/gm','commentator':'assets/staff','podcast host':'assets/podcast_hosts','logo':'assets/logos','banner':'assets/banners','championship belt':'assets/belts'}
-   folder=folder_map[kind]
-   if kind in ('logo','banner'): fname=slug(pic_comp)
-   elif kind=='championship belt': fname=belt_file_slug(pic_comp,target)
-   else: fname=slug(target)
-   if f:
-    ext='.'+f.name.split('.')[-1].lower(); p=Path(folder)/f'{fname}{ext}'; p.write_bytes(f.read()); st.success(f'Image saved as {p.name}.'); st.rerun()
-   elif url:
-    try:
-     import urllib.request
-     ext='.png' if '.png' in url.lower() else '.jpg'; p=Path(folder)/f'{fname}{ext}'; urllib.request.urlretrieve(url,p); st.success('Image downloaded and saved.'); st.rerun()
-    except Exception as e: st.error(str(e))
-   else: st.warning('Upload a file or provide a URL.')
+ f=st.file_uploader('Upload image (png/jpg/jpeg/webp)',type=['png','jpg','jpeg','webp'],key=f'pic_upload_{pic_comp}_{kind}')
+ url=st.text_input('Optional image URL','',key=f'pic_url_{pic_comp}_{kind}')
+ if st.button('Save Picture',key=f'pic_save_{pic_comp}_{kind}'):
+  if kind in ('owner','gm','wrestler','commentator','podcast host') and not (target or '').strip():
+   st.error('Select a person before saving.')
+  elif kind=='championship belt' and not target:
+   st.error('Select a championship title before saving.')
+  else:
+   ok,msg=save_picture_asset(kind,pic_comp,target,f=f,url=url)
+   if ok: st.success(msg); st.rerun()
+   else: st.error(msg)
  with bfg_card('Belt filename reference'):
   for comp in PLAYABLE:
    st.write(f'**{comp}**')
