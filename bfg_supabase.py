@@ -8,19 +8,106 @@ COMPANY_ALL = 'All'
 _client = None
 
 
+def _secrets_from_toml():
+ """Read Supabase creds from .streamlit/secrets.toml (CLI / scripts)."""
+ try:
+  from pathlib import Path
+  import re
+  p = Path('.streamlit/secrets.toml')
+  if not p.is_file():
+   return '', ''
+  text = p.read_text(encoding='utf-8')
+  def _val(name):
+   m = re.search(rf'^{name}\s*=\s*["\']([^"\']+)["\']', text, re.M)
+   return (m.group(1) if m else '').strip()
+  return _val('SUPABASE_URL'), _val('SUPABASE_KEY')
+ except Exception:
+  return '', ''
+
+
+def _valid_supabase_creds(url, key):
+ url = (url or '').strip()
+ key = (key or '').strip()
+ if not url or not key:
+  return False
+ placeholders = (
+  'YOUR_PROJECT', 'your-service-role', 'your-anon-key', 'your-key',
+  'your-url', 'xxxx.supabase.co', 'YOUR_USERNAME',
+ )
+ if any(p in url or p in key for p in placeholders):
+  return False
+ if not url.startswith('https://') or '.supabase.co' not in url:
+  return False
+ if len(key) < 20:
+  return False
+ return True
+
+
 def supabase_configured():
  try:
   import streamlit as st
   url = (st.secrets.get('SUPABASE_URL') or '').strip()
   key = (st.secrets.get('SUPABASE_KEY') or '').strip()
-  return bool(url and key)
+  if _valid_supabase_creds(url, key):
+   return True
  except Exception:
-  return False
+  pass
+ import os
+ url = (os.getenv('SUPABASE_URL') or '').strip()
+ key = (os.getenv('SUPABASE_KEY') or '').strip()
+ if _valid_supabase_creds(url, key):
+  return True
+ url, key = _secrets_from_toml()
+ return _valid_supabase_creds(url, key)
 
 
 def _get_secrets():
- import streamlit as st
- return st.secrets['SUPABASE_URL'].strip(), st.secrets['SUPABASE_KEY'].strip()
+ try:
+  import streamlit as st
+  url = (st.secrets.get('SUPABASE_URL') or '').strip()
+  key = (st.secrets.get('SUPABASE_KEY') or '').strip()
+  if _valid_supabase_creds(url, key):
+   return url, key
+ except Exception:
+  pass
+ import os
+ url = (os.getenv('SUPABASE_URL') or '').strip()
+ key = (os.getenv('SUPABASE_KEY') or '').strip()
+ if _valid_supabase_creds(url, key):
+  return url, key
+ url, key = _secrets_from_toml()
+ if _valid_supabase_creds(url, key):
+  return url, key
+ raise RuntimeError('Supabase not configured — add SUPABASE_URL and SUPABASE_KEY to Streamlit secrets.')
+
+
+def reset_client():
+ """Clear cached client after secrets change."""
+ global _client
+ _client = None
+
+
+def write_supabase_secrets(url, key):
+ """Persist Supabase creds for local + Streamlit recovery pulls."""
+ from pathlib import Path
+ import re
+ url = (url or '').strip()
+ key = (key or '').strip()
+ if not _valid_supabase_creds(url, key):
+  raise ValueError('Invalid Supabase URL or KEY')
+ p = Path('.streamlit/secrets.toml')
+ p.parent.mkdir(parents=True, exist_ok=True)
+ text = p.read_text(encoding='utf-8') if p.is_file() else ''
+ for name, val in (('SUPABASE_URL', url), ('SUPABASE_KEY', key)):
+  line = f'{name} = "{val}"'
+  pat = re.compile(rf'^{name}\s*=.*$', re.M)
+  text = pat.sub(line, text) if pat.search(text) else (text.rstrip() + '\n' + line + '\n')
+ p.write_text(text if text.endswith('\n') else text + '\n', encoding='utf-8')
+ import os
+ os.environ['SUPABASE_URL'] = url
+ os.environ['SUPABASE_KEY'] = key
+ reset_client()
+ return True
 
 
 def get_client():
@@ -198,6 +285,8 @@ def build_save_rows(session_id, payload, week_state=None, pending_trades=None):
    'confirmed_story_debuts': payload.get('confirmed_story_debuts', []),
    'tag_team_overrides': payload.get('tag_team_overrides', {}),
    'wrestler_name_history': payload.get('wrestler_name_history', []),
+   'wrestler_image_meta': payload.get('wrestler_image_meta', {}),
+   'rosters': payload.get('rosters', {}),
    'custom_tag_teams': payload.get('custom_tag_teams', {}),
    'roster_show_staff': payload.get('roster_show_staff', {}),
    'breakup_history': payload.get('breakup_history', []),
@@ -329,6 +418,45 @@ def build_save_rows(session_id, payload, week_state=None, pending_trades=None):
     'factions': _filter_company(factions, co),
    },
   })
+  img_meta = payload.get('wrestler_image_meta', {}) or {}
+  try:
+   import bfg_picture_sync as pic_sync
+  except Exception:
+   pic_sync = None
+  for w in _filter_company(roster_all, co):
+   wid = w.get('wrestler_id', '')
+   if not wid:
+    continue
+   if w.get('is_custom_wrestler'):
+    rows.append({
+     'session_id': session_id,
+     'company': co,
+     'save_type': 'roster_member',
+     'save_key': wid,
+     'payload': {'wrestler': w},
+    })
+   meta = img_meta.get(wid) if isinstance(img_meta, dict) else None
+   if meta or w.get('image_path') or w.get('image_url'):
+    b64 = ''
+    if pic_sync:
+     raw = pic_sync.image_bytes_for_wrestler(w)
+     if raw and len(raw) <= 1_500_000:
+      import base64
+      b64 = base64.b64encode(raw).decode('ascii')
+    rows.append({
+     'session_id': session_id,
+     'company': co,
+     'save_type': 'wrestler_image',
+     'save_key': wid,
+     'payload': {
+      'wrestler_id': wid,
+      'name': w.get('name', ''),
+      'image_path': w.get('image_path', ''),
+      'image_url': w.get('image_url', ''),
+      'image_data_b64': b64,
+      'meta': meta or {},
+     },
+    })
   rows.append({
    'session_id': session_id,
    'company': co,
@@ -523,6 +651,21 @@ def merge_rows_to_payload(rows):
    out['staff'].extend(payload.get('staff', []))
    out['team_profiles'].update(payload.get('team_profiles', {}))
    out['factions'].extend(payload.get('factions', []))
+  elif stype == 'roster_member' and co in PLAYABLE:
+   w = payload.get('wrestler')
+   if isinstance(w, dict):
+    out.setdefault('_roster_members', []).append(w)
+  elif stype == 'wrestler_image' and co in PLAYABLE:
+   wid = payload.get('wrestler_id') or row.get('save_key', '')
+   if wid:
+    out.setdefault('wrestler_image_meta', {})
+    out['wrestler_image_meta'][wid] = payload.get('meta') or payload
+    out.setdefault('_wrestler_image_paths', {})[wid] = {
+     'image_path': payload.get('image_path', ''),
+     'image_url': payload.get('image_url', ''),
+     'image_data_b64': payload.get('image_data_b64', ''),
+     'company': co,
+    }
   elif stype == 'champions' and co in PLAYABLE:
    out['champions'].update(payload.get('champions', {}))
    out['title_prestige'].update(payload.get('title_prestige', {}))
@@ -542,6 +685,18 @@ def merge_rows_to_payload(rows):
 
  out.setdefault('calendar_locked', False)
  out.setdefault('calendar_ai_notes', [])
+ extra_members = out.pop('_roster_members', [])
+ if extra_members:
+  out['roster'] = (out.get('roster') or []) + extra_members
+ img_paths = out.pop('_wrestler_image_paths', {})
+ for wid, info in (img_paths or {}).items():
+  for w in out.get('roster', []):
+   if w.get('wrestler_id') == wid:
+    if info.get('image_path'):
+     w['image_path'] = info['image_path']
+    if info.get('image_url'):
+     w['image_url'] = info['image_url']
+    break
  return out
 
 

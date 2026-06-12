@@ -38,7 +38,7 @@ def brand_season_metrics(company, session_state):
 
     story_q = _avg([s.get('quality_score', 50) for s in storylines]) or 50
     cont = _avg([s.get('continuity_score', 50) for s in storylines]) or 50
-    sponsor_done = sum(1 for o in objs if o.get('status') == 'Completed')
+    sponsor_done = sum(1 for o in objs if o.get('status') in ('Met', 'Partial', 'Paid', 'Completed'))
     sponsor_total = max(1, len(objs))
     sponsor_pct = 100.0 * sponsor_done / sponsor_total
     ratings = [float(h.get('rating', 7) or 7) for h in hist]

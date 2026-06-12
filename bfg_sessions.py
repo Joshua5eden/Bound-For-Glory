@@ -115,6 +115,14 @@ def generate_invite_code():
  return f'BFG-{random.randint(10000, 99999)}'
 
 
+def reserve_invite_code(preferred=None):
+ """Use a specific invite code when available, else generate a new one."""
+ code = normalize_invite_code(preferred) if preferred else ''
+ if code and not invite_exists(code):
+  return code
+ return generate_invite_code()
+
+
 def generate_access_code():
  return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
@@ -231,6 +239,12 @@ def match_access_code(meta, access_code):
  code = (access_code or '').strip().upper()
  if not code or not meta:
   return None
+ extra = meta.get('extra_access') or {}
+ if code in extra:
+  slot = extra[code]
+  if slot in ROLE_MAP:
+   role, company = ROLE_MAP[slot]
+   return {'role': role, 'company': company, 'slot': slot}
  pairs = [
   ('admin_code', 'admin'),
   ('nxt_code', 'nxt'),
@@ -244,10 +258,36 @@ def match_access_code(meta, access_code):
  return None
 
 
-def create_private_session(game_name, creator_name):
+def restore_access_code(invite_code, access_code, role_slot='admin', keep_previous=True):
+ """Re-activate a remembered brand code on an existing invite session."""
+ init_storage()
+ sid = resolve_invite(normalize_invite_code(invite_code) or invite_code)
+ if not sid:
+  raise ValueError(f'Invite {invite_code} not found on this server.')
+ meta = load_session_meta(sid) or {'session_id': sid}
+ code = (access_code or '').strip().upper()
+ if not code or len(code) < 6:
+  raise ValueError('Access code must be at least 6 characters.')
+ slot = (role_slot or 'admin').lower()
+ if slot not in ROLE_MAP:
+  raise ValueError(f'Unknown role slot: {role_slot}')
+ field = f'{slot}_code' if slot != 'admin' else 'admin_code'
+ history = meta.setdefault('code_history', {})
+ if keep_previous and meta.get(field) and meta[field] != code:
+  history[field] = meta[field]
+  extra = meta.setdefault('extra_access', {})
+  extra[(meta[field] or '').strip().upper()] = slot
+ meta[field] = code
+ extra = meta.setdefault('extra_access', {})
+ extra[code] = slot
+ save_session_meta(sid, meta)
+ return meta
+
+
+def create_private_session(game_name, creator_name, invite_code=None):
  init_storage()
  session_id = generate_session_id()
- invite_code = generate_invite_code()
+ invite_code = reserve_invite_code(invite_code)
  admin_code = generate_access_code()
  nxt_code = generate_access_code()
  smackdown_code = generate_access_code()
@@ -314,6 +354,173 @@ def join_private_session(invite_code, player_name, access_code):
   'assigned_company': role_info['company'],
   'meta': meta,
  }, None
+
+
+def session_picture_stats(session_id):
+ """Count portraits linked in a session roster."""
+ init_storage()
+ uni = db_load_blob('mp_universe', session_id) if session_id != 'local' else None
+ if not uni:
+  f = (LOCAL_LEGACY_DIR if session_id == 'local' else session_dir(session_id)) / 'universe.json'
+  if f.exists():
+   try:
+    uni = json.loads(f.read_text(encoding='utf-8'))
+   except Exception:
+    uni = None
+ if not isinstance(uni, dict):
+  return {'total': 0, 'NXT': 0, 'SmackDown': 0, 'WCW': 0}
+ stats = {'total': 0, 'NXT': 0, 'SmackDown': 0, 'WCW': 0}
+ for w in uni.get('roster', []) or []:
+  if not isinstance(w, dict):
+   continue
+  if not (w.get('image_path') or w.get('image_url')):
+   continue
+  stats['total'] += 1
+  co = w.get('company', '')
+  if co in stats:
+   stats[co] += 1
+ return stats
+
+
+def lookup_invite_session(invite_code):
+ """Resolve invite to session meta + picture stats on this server."""
+ init_storage()
+ sid = resolve_invite(normalize_invite_code(invite_code) or invite_code)
+ if not sid:
+  return None
+ meta = load_session_meta(sid) or {'session_id': sid}
+ meta['session_id'] = sid
+ meta['picture_stats'] = session_picture_stats(sid)
+ saves = [s for s in list_saved_sessions() if s['session_id'] == sid]
+ if saves:
+  meta['week'] = saves[0].get('week', 0)
+  meta['has_universe'] = saves[0].get('has_universe', False)
+ return meta
+
+
+def list_saved_sessions():
+ """All universes on this server — for Continue / Clone screens."""
+ init_storage()
+ out = []
+ seen = set()
+
+ def _add(session_id, game_name, week, updated, invite_code='', has_universe=False):
+  if session_id in seen:
+   return
+  seen.add(session_id)
+  out.append({
+   'session_id': session_id,
+   'game_name': game_name or 'Universe',
+   'week': week,
+   'updated': updated,
+   'invite_code': invite_code,
+   'has_universe': has_universe,
+  })
+
+ local_uni = LOCAL_LEGACY_DIR / 'universe.json'
+ if local_uni.exists():
+  try:
+   data = json.loads(local_uni.read_text(encoding='utf-8'))
+   _add('local', data.get('game_name', 'Solo test universe'), data.get('week', 0), data.get('last_updated_at', ''), has_universe=True)
+  except Exception:
+   pass
+
+ if SESSIONS_ROOT.exists():
+  for p in sorted(SESSIONS_ROOT.iterdir(), key=lambda x: x.stat().st_mtime if x.is_dir() else 0, reverse=True):
+   if not p.is_dir():
+    continue
+   sid = p.name
+   uni = p / 'universe.json'
+   meta = load_session_meta(sid) or {}
+   if not uni.exists() and not meta:
+    continue
+   data = {}
+   if uni.exists():
+    try:
+     data = json.loads(uni.read_text(encoding='utf-8'))
+    except Exception:
+     data = {}
+   pics = session_picture_stats(sid)
+   _add(
+    sid,
+    data.get('game_name') or meta.get('game_name') or sid[:8],
+    data.get('week', 0),
+    data.get('last_updated_at') or meta.get('created_at', ''),
+    meta.get('invite_code', ''),
+    has_universe=uni.exists() or bool(db_load_blob('mp_universe', sid)),
+   )
+   if out and out[-1]['session_id'] == sid:
+    out[-1].update({
+     'admin_code': meta.get('admin_code', ''),
+     'nxt_code': meta.get('nxt_code', ''),
+     'smackdown_code': meta.get('smackdown_code', ''),
+     'wcw_code': meta.get('wcw_code', ''),
+     'picture_stats': pics,
+    })
+ return sorted(out, key=lambda s: s.get('updated', ''), reverse=True)
+
+
+def clone_private_session(source_session_id, new_game_name, creator_name, invite_code=None):
+ """New invite codes + session id, but copy roster, pictures meta, saves, and progress."""
+ init_storage()
+ source_session_id = (source_session_id or '').strip() or 'local'
+ src_dir = LOCAL_LEGACY_DIR if source_session_id == 'local' else session_dir(source_session_id)
+ if source_session_id != 'local' and not src_dir.exists():
+  raise FileNotFoundError('Source session folder not found.')
+
+ meta = create_private_session((new_game_name or 'Cloned Universe').strip(), (creator_name or 'Admin').strip(), invite_code=invite_code)
+ new_id = meta['session_id']
+ dst_dir = session_dir(new_id)
+ dst_dir.mkdir(parents=True, exist_ok=True)
+
+ import shutil
+ for fname in ('universe.json', 'custom_roster.json', 'week_state.json', 'pending_trades.json'):
+  src = src_dir / fname
+  if src.exists():
+   shutil.copy2(src, dst_dir / fname)
+
+ uni_path = dst_dir / 'universe.json'
+ universe = None
+ if uni_path.exists():
+  try:
+   universe = json.loads(uni_path.read_text(encoding='utf-8'))
+  except Exception:
+   universe = None
+ if universe is None:
+  universe = db_load_blob('mp_universe', source_session_id) if source_session_id != 'local' else None
+ if universe is None and (src_dir / 'universe.json').exists():
+  try:
+   universe = json.loads((src_dir / 'universe.json').read_text(encoding='utf-8'))
+  except Exception:
+   universe = None
+ if universe is None:
+  raise FileNotFoundError('No universe save found to clone.')
+
+ universe = json.loads(json.dumps(universe, default=str))
+ universe['session_id'] = new_id
+ universe['game_name'] = meta['game_name']
+ universe['last_updated_by'] = meta['created_by']
+ universe['last_updated_at'] = _now_iso()
+ uni_path.write_text(json.dumps(universe, indent=2, default=str), encoding='utf-8')
+ db_save_blob('mp_universe', new_id, universe)
+
+ for table, fname in (('mp_week_state', 'week_state.json'), ('mp_pending_trades', 'pending_trades.json')):
+  blob = None
+  fpath = dst_dir / fname
+  if fpath.exists():
+   try:
+    blob = json.loads(fpath.read_text(encoding='utf-8'))
+   except Exception:
+    blob = None
+  if blob is None and source_session_id != 'local':
+   blob = db_load_blob(table, source_session_id)
+  if blob is not None:
+   db_save_blob(table, new_id, blob)
+   fpath.write_text(json.dumps(blob, indent=2, default=str), encoding='utf-8')
+
+ meta['cloned_from'] = source_session_id
+ save_session_meta(new_id, meta)
+ return meta
 
 
 def delete_session(session_id):

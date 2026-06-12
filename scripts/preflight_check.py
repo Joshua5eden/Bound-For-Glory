@@ -19,6 +19,7 @@ MODULES = [
     'bfg_show_quality.py',
     'bfg_twitter_recruit.py',
     'bfg_name_change.py',
+    'bfg_roster_store.py',
 ]
 
 

@@ -1,0 +1,753 @@
+{
+  "updated_at": "2026-06-12T01:53:12.276142+00:00",
+  "character_bible": {
+    "Christian Rose": {
+      "archetype": "Hollywood franchise final boss with ruthless Triple H power and Rock-level star aura.",
+      "promo": "Dangerous, arrogant, corporate, cinematic, personal, manipulative.",
+      "should_do": [
+        "control",
+        "legacy",
+        "Hollywood",
+        "power",
+        "main event",
+        "franchise",
+        "manipulate"
+      ],
+      "should_not": [
+        "beg",
+        "act humble",
+        "look weak"
+      ],
+      "notes": "Your universe version.",
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Lani Rose": {
+      "archetype": "Fearless top woman with fire and fight.",
+      "promo": "Fiery, defiant, emotional, sharp.",
+      "should_do": [
+        "fight",
+        "challenge",
+        "prove",
+        "champion"
+      ],
+      "should_not": [
+        "sound timid"
+      ],
+      "notes": "",
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Raven": {
+      "archetype": "Dark psychological villain.",
+      "promo": "Cryptic, poetic, dark.",
+      "should_do": [
+        "mind games",
+        "pain",
+        "darkness",
+        "fear"
+      ],
+      "should_not": [
+        "act goofy"
+      ],
+      "notes": "",
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "CM Punk": {
+      "archetype": "Loose cannon truth teller.",
+      "promo": "Sharp, real, confrontational.",
+      "should_do": [
+        "truth",
+        "pipebomb",
+        "call out",
+        "hypocrisy"
+      ],
+      "should_not": [
+        "sound corporate"
+      ],
+      "notes": "",
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    }
+  },
+  "staff_character_bible": {
+    "Eric Bischoff": {
+      "company": "NXT",
+      "role": "Owner / GM",
+      "archetype": "Owner / GM",
+      "promo": "smug media power-broker, ratings-obsessed, Hollywood-savvy",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@EricBischoffNXT",
+      "authority": 8,
+      "sponsor_trust": 7,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Mauro Ranallo": {
+      "company": "NXT",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "dramatic, emotional, poetic, big-fight",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@MauroNXT",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Pat McAfee": {
+      "company": "NXT",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "energetic, funny, loud, fan-like",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@PatNXT",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Jerry Lawler": {
+      "company": "NXT",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "old-school, witty",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@KingNXT",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "R-Truth": {
+      "company": "NXT",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "funny, confused, entertaining",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@TruthNXT",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Samantha Irvin": {
+      "company": "NXT",
+      "role": "Ring Announcer",
+      "archetype": "Ring Announcer",
+      "promo": "emotional, entrance-focused, historic moment hype",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@SamanthaNXT",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "NXT Official": {
+      "company": "NXT",
+      "role": "Company Account",
+      "archetype": "Company Account",
+      "promo": "official brand account",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@NXTImmortal",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Ric Flair": {
+      "company": "SmackDown",
+      "role": "Owner",
+      "archetype": "Owner",
+      "promo": "loud, stylish, arrogant, celebrity-driven, WOOOO energy",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@RicFlairSD",
+      "authority": 8,
+      "sponsor_trust": 7,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Ava": {
+      "company": "SmackDown",
+      "role": "GM",
+      "archetype": "young modern authority figure controlling chaotic celebrity-heavy SmackDown",
+      "promo": "professional, direct, confident, sometimes defensive",
+      "should_do": [
+        "make matches",
+        "respond to drama",
+        "defend SmackDown"
+      ],
+      "should_not": [
+        "sound timid",
+        "ignore roster chaos"
+      ],
+      "notes": "",
+      "handle": "@AvaSDGM",
+      "authority": 8,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Eric Collins": {
+      "company": "SmackDown",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "intense highlight-reel style",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@EricCollinsSD",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Ernie Johnson": {
+      "company": "SmackDown",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "professional studio host",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@ErnieSD",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Dick Vitale": {
+      "company": "SmackDown",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "excited sports-broadcast style",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@DickieVSD",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Mike Walczewski": {
+      "company": "SmackDown",
+      "role": "Ring Announcer",
+      "archetype": "Ring Announcer",
+      "promo": "classic big-fight arena announcer",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@MikeWSD",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "SmackDown Official": {
+      "company": "SmackDown",
+      "role": "Company Account",
+      "archetype": "Company Account",
+      "promo": "mainstream TV brand account",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@SmackDownBFG",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Stephanie McMahon": {
+      "company": "WCW",
+      "role": "Owner",
+      "archetype": "Owner",
+      "promo": "corporate sports-network owner, serious and competitive",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@StephanieWCW",
+      "authority": 8,
+      "sponsor_trust": 7,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Shane McMahon": {
+      "company": "WCW",
+      "role": "Owner",
+      "archetype": "Owner",
+      "promo": "risk-taking corporate sports promoter",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@ShaneWCW",
+      "authority": 8,
+      "sponsor_trust": 7,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Nick Aldis": {
+      "company": "WCW",
+      "role": "GM",
+      "archetype": "GM",
+      "promo": "serious GM protecting championship legitimacy",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@NickAldisWCW",
+      "authority": 8,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Michael Cole": {
+      "company": "WCW",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "official and polished",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@ColeWCW",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Corey Graves": {
+      "company": "WCW",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "sarcastic, sharp, heel-leaning",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@GravesWCW",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Jim Ross": {
+      "company": "WCW",
+      "role": "Commentator",
+      "archetype": "Commentator",
+      "promo": "old-school, serious, legendary, big-fight",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@JrWCW",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Michael Buffer": {
+      "company": "WCW",
+      "role": "Ring Announcer",
+      "archetype": "Ring Announcer",
+      "promo": "grand, prestigious, fight-night style",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@BufferWCW",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 9,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "WCW Official": {
+      "company": "WCW",
+      "role": "Company Account",
+      "archetype": "Company Account",
+      "promo": "sports league brand account",
+      "should_do": [
+        "protect brand identity",
+        "react to shows",
+        "promote big moments"
+      ],
+      "should_not": [
+        "sound generic"
+      ],
+      "notes": "",
+      "handle": "@WCWLegacy",
+      "authority": 4,
+      "sponsor_trust": 5,
+      "broadcast_credibility": 5,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    }
+  },
+  "nxt_unfiltered_hosts": {
+    "Maya Cruz": {
+      "name": "Maya Cruz",
+      "host_slot": "maya",
+      "gender": "Female",
+      "character_type": "Podcast Host",
+      "company": "NXT",
+      "identity": "Emotional story analyst",
+      "personality": "thoughtful, sharp, empathetic, serious when needed",
+      "podcast_role": "breaks down emotion, character pain, betrayal, redemption, and fan investment",
+      "speaking_style": "calm, deep, emotionally intelligent",
+      "strengths": [
+        "emotional intelligence",
+        "empathy",
+        "fan investment reads",
+        "character psychology"
+      ],
+      "weaknesses": [
+        "can underweight business optics",
+        "sometimes too serious for light weeks"
+      ],
+      "focuses_on": [
+        "character emotions",
+        "relationship drama",
+        "betrayal",
+        "morale",
+        "fan sympathy",
+        "why the audience cares"
+      ],
+      "should_not": [
+        "talk like a generic recap host",
+        "ignore emotional consequences"
+      ],
+      "bias": "leans toward emotional truth and fan sympathy",
+      "catchphrase": "Let us sit with what that moment actually cost them.",
+      "image_path": "",
+      "tts_voice": "warm",
+      "tts_speed": 0.94,
+      "tts_energy": 0.85,
+      "bookable": false,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Tasha Monroe": {
+      "name": "Tasha Monroe",
+      "host_slot": "tasha",
+      "gender": "Female",
+      "character_type": "Podcast Host",
+      "company": "NXT",
+      "identity": "Pop culture and media analyst",
+      "personality": "stylish, confident, witty, entertainment-focused",
+      "podcast_role": "connects NXT stories to Hollywood, Netflix, Marvel/DC, Oscars, SNL, GMA, Olympics, and media buzz",
+      "speaking_style": "fast, smart, celebrity/media aware",
+      "strengths": [
+        "pop culture framing",
+        "press and trend reads",
+        "Hollywood crossover angles"
+      ],
+      "weaknesses": [
+        "can rush in-ring logic",
+        "sometimes favors buzz over payoff"
+      ],
+      "focuses_on": [
+        "media appearances",
+        "press",
+        "popularity",
+        "Twitter trends",
+        "Hollywood crossover",
+        "sponsor reactions"
+      ],
+      "should_not": [
+        "ignore business/media impact"
+      ],
+      "bias": "frames everything through mainstream entertainment optics",
+      "catchphrase": "If it is not trending, it is not finished.",
+      "image_path": "",
+      "tts_voice": "bright",
+      "tts_speed": 0.96,
+      "tts_energy": 0.95,
+      "bookable": false,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Serena Vale": {
+      "name": "Serena Vale",
+      "host_slot": "serena",
+      "gender": "Female",
+      "character_type": "Podcast Host",
+      "company": "NXT",
+      "identity": "Former athlete / locker room psychology voice",
+      "personality": "direct, competitive, no-nonsense, protective of wrestlers",
+      "podcast_role": "analyzes morale, backstage tension, contracts, creative frustration, and whether wrestlers feel respected",
+      "speaking_style": "blunt, honest, athletic, locker-room focused",
+      "strengths": [
+        "locker room truth",
+        "morale and contract reads",
+        "protects talent"
+      ],
+      "weaknesses": [
+        "can sound harsh to casual fans",
+        "less patient with comedy beats"
+      ],
+      "focuses_on": [
+        "morale",
+        "contracts",
+        "locker room tension",
+        "disrespect",
+        "stamina",
+        "burnout",
+        "refusing to perform"
+      ],
+      "should_not": [
+        "sugarcoat bad booking"
+      ],
+      "bias": "protects talent and calls out disrespect",
+      "catchphrase": "Respect is not a storyline \u2014 it is a contract with the locker room.",
+      "image_path": "",
+      "tts_voice": "deep",
+      "tts_speed": 0.95,
+      "tts_energy": 0.9,
+      "bookable": false,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Marcus King": {
+      "name": "Marcus King",
+      "host_slot": "marcus",
+      "gender": "Male",
+      "character_type": "Podcast Host",
+      "company": "NXT",
+      "identity": "Wrestling historian and storyline critic",
+      "personality": "analytical, intense, traditional wrestling mind",
+      "podcast_role": "judges whether the story makes sense week to week",
+      "speaking_style": "serious, detailed, sometimes harsh",
+      "strengths": [
+        "continuity tracking",
+        "booking logic",
+        "long-term storytelling"
+      ],
+      "weaknesses": [
+        "can over-criticize",
+        "slow on pop culture tangents"
+      ],
+      "focuses_on": [
+        "continuity",
+        "booking logic",
+        "title prestige",
+        "long-term storytelling",
+        "PLE build",
+        "dropped storylines"
+      ],
+      "should_not": [
+        "overpraise random booking"
+      ],
+      "bias": "continuity hawk \u2014 rewards earned stories",
+      "catchphrase": "Show me the thread, not just the spot.",
+      "image_path": "",
+      "tts_voice": "broadcast",
+      "tts_speed": 0.93,
+      "tts_energy": 0.8,
+      "bookable": false,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Dante Brooks": {
+      "name": "Dante Brooks",
+      "host_slot": "dante",
+      "gender": "Male",
+      "character_type": "Podcast Host",
+      "company": "NXT",
+      "identity": "Business and ratings analyst",
+      "personality": "smooth, strategic, numbers-focused, media-business minded",
+      "podcast_role": "explains viewership, attendance, money, sponsorships, popularity movement, and company prestige",
+      "speaking_style": "polished, confident, business-like",
+      "strengths": [
+        "ratings and revenue reads",
+        "sponsor trust",
+        "popularity economics"
+      ],
+      "weaknesses": [
+        "can cold-read raw emotion",
+        "risks spreadsheet tone"
+      ],
+      "focuses_on": [
+        "viewership",
+        "attendance",
+        "profit/loss",
+        "popularity",
+        "sponsor trust",
+        "press reaction",
+        "company value"
+      ],
+      "should_not": [
+        "ignore story quality when discussing business"
+      ],
+      "bias": "numbers-first but respects emotional payoffs that sell",
+      "catchphrase": "Emotion is a line item when it is real.",
+      "image_path": "",
+      "tts_voice": "smooth",
+      "tts_speed": 0.94,
+      "tts_energy": 0.75,
+      "bookable": false,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    },
+    "Rico Blaze": {
+      "name": "Rico Blaze",
+      "host_slot": "rico",
+      "gender": "Male",
+      "character_type": "Podcast Host",
+      "company": "NXT",
+      "identity": "Fan voice / hot-take debate host",
+      "personality": "loud, funny, passionate, unpredictable, emotional fan energy",
+      "podcast_role": "says what fans online are probably thinking",
+      "speaking_style": "energetic, funny, dramatic, debate-style",
+      "strengths": [
+        "fan reaction",
+        "viral moment reads",
+        "debate energy"
+      ],
+      "weaknesses": [
+        "can get too silly on serious emotional stories",
+        "hot takes need fact-checking"
+      ],
+      "focuses_on": [
+        "Twitter reaction",
+        "fan outrage",
+        "hype moments",
+        "viral clips",
+        "controversial tweets",
+        "who fans love/hate"
+      ],
+      "should_not": [
+        "become too silly during serious emotional stories"
+      ],
+      "bias": "fan-first hot takes \u2014 loud but not clueless",
+      "catchphrase": "The timeline is not wrong \u2014 it is just early.",
+      "image_path": "",
+      "tts_voice": "fan-debate",
+      "tts_speed": 0.98,
+      "tts_energy": 1.0,
+      "bookable": false,
+      "updated_at": "2026-06-08T00:05:27.121116+00:00"
+    }
+  }
+}

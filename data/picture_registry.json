@@ -1,0 +1,36 @@
+{
+  "updated_at": "2026-06-12T01:53:11.913481+00:00",
+  "wrestlers": {
+    "W-cm_punk-nxt": {
+      "wrestler_id": "W-cm_punk-nxt",
+      "name": "CM Punk",
+      "company": "NXT",
+      "image_path": "assets/wrestlers/W-cm_punk-nxt.png",
+      "image_url": "",
+      "image_data_b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADklEQVR4nGNgYmBkYAAAABMABJi60jkAAAAASUVORK5CYII=",
+      "updated_at": "2026-06-12T01:53:11.910559+00:00"
+    },
+    "W-raven-nxt": {
+      "wrestler_id": "W-raven-nxt",
+      "name": "Raven",
+      "company": "NXT",
+      "image_path": "assets/wrestlers/W-raven-nxt.png",
+      "image_url": "",
+      "image_data_b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADklEQVR4nGNgYmBkYAAAABMABJi60jkAAAAASUVORK5CYII=",
+      "updated_at": "2026-06-12T01:53:11.912945+00:00"
+    },
+    "W-roman_reigns-nxt": {
+      "wrestler_id": "W-roman_reigns-nxt",
+      "name": "Roman Reigns",
+      "company": "NXT",
+      "image_path": "assets/wrestlers/W-roman_reigns-nxt.png",
+      "image_url": "",
+      "image_data_b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADklEQVR4nGNgYmBkYAAAABMABJi60jkAAAAASUVORK5CYII=",
+      "updated_at": "2026-06-12T01:53:11.911985+00:00"
+    }
+  },
+  "belts": {},
+  "logos": {},
+  "owners": {},
+  "banners": {}
+}

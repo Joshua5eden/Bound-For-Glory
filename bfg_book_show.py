@@ -518,7 +518,7 @@ def render_show_memory_panel(h, company, mp_edit, current_week, money_fn=None):
 def render_match_card_builder(h, company, draft, mp_edit, co_st):
     segs = draft.setdefault('segments', [])
     st_opts = ['— None —'] + [f"{s.get('id')}: {s.get('name', '')}" for s in co_st[:20]]
-    sponsors = (h.COMPANIES.get(company, {}) or {}).get('sponsors', [])
+    spo_opts = [''] + [lbl for lbl, _ in sponsor_obj.active_objective_options(company)]
 
     with st.expander('Add segment', expanded=len(segs) == 0):
         stype = st.selectbox('Segment type', SEGMENT_TYPES, key='book_add_stype')
@@ -572,7 +572,13 @@ def render_match_card_builder(h, company, draft, mp_edit, co_st):
                     s['storyline_id'] = None
             else:
                 s['storyline_id'] = None
-            s['sponsor_objective'] = st.selectbox('Sponsor objective', [''] + sponsors, key=f'bseg_spo_{s["id"]}')
+            cur_spo = s.get('sponsor_objective', '')
+            if cur_spo and cur_spo not in spo_opts:
+                spo_opts = spo_opts + [cur_spo]
+            s['sponsor_objective'] = st.selectbox(
+                'Sponsor objective (assigned)', spo_opts, key=f'bseg_spo_{s["id"]}',
+                help='Link segment to an open sponsor-assigned objective — not a random sponsor pick.',
+            )
             s['story_purpose'] = st.text_input('Story purpose', s.get('story_purpose', ''), key=f'bseg_purp_{s["id"]}')
             s['emotional_beat'] = st.text_input('Emotional beat', s.get('emotional_beat', ''), key=f'bseg_emo_{s["id"]}')
             s['description'] = st.text_area('Segment description', s.get('description', ''), height=80, key=f'bseg_desc_{s["id"]}')
@@ -663,8 +669,14 @@ def render_book_show_page(h):
     meta.update({'show_name': show_name, 'episode': episode, 'ple': ple, 'featured': featured})
     rival = st.text_input('Top rivalry', sched.get('planned_rivalry', '') if sched else '', key='book_rival')
     meta['rival'] = rival
-    sponsors = (h.COMPANIES.get(company, {}) or {}).get('sponsors', [])
-    meta['sponsor'] = st.selectbox('Sponsor objective attached', [''] + sponsors, key='book_sponsor')
+    spo_opts = [''] + [lbl for lbl, _ in sponsor_obj.active_objective_options(company)]
+    cur_meta_spo = meta.get('sponsor', '')
+    if cur_meta_spo and cur_meta_spo not in spo_opts:
+        spo_opts = spo_opts + [cur_meta_spo]
+    meta['sponsor'] = st.selectbox(
+        'Sponsor objective attached', spo_opts, key='book_sponsor',
+        help='Attach show to a sponsor-assigned objective from Sponsor Objectives page.',
+    )
     meta['main_event'] = st.text_input('Main event (label)', meta.get('main_event', ''), key='book_main_ev')
     meta['notes'] = st.text_area('Notes', meta.get('notes', ''), height=60, key='book_notes')
 

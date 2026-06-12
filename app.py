@@ -1,6 +1,6 @@
 import os, re, json, random, asyncio, subprocess, shutil, hashlib
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from contextlib import contextmanager
 import streamlit as st
 
@@ -43,6 +43,63 @@ import bfg_sponsor_objectives as sponsor_obj
 import bfg_autosave as autosave
 import bfg_ui_pages as ui_pages
 import bfg_name_change as namechg
+try:
+ import bfg_roster_store as roster_store
+ import bfg_picture_sync as pic_sync
+ import bfg_character_sync as char_sync
+except ImportError:
+ class _PicSyncStub:
+  @staticmethod
+  def repair_all_pictures(roster): return {'linked_count':0,'registry_count':0,'restored_files':0}
+  @staticmethod
+  def apply_registry_to_roster(roster): return roster
+  @staticmethod
+  def propagate_pictures_to_all_sessions(*_a,**_k): return 0
+  @staticmethod
+  def recover_pictures_from_streamlit(*_a,**_k): return {'ok':False,'error':'picture sync module missing','imported':0}
+  @staticmethod
+  def import_pictures_from_supabase(*_a,**_k): return {'ok':False,'error':'picture sync module missing','imported':0}
+  @staticmethod
+  def registry_to_image_meta(): return {}
+  @staticmethod
+  def bulk_import_wrestler_images(*_a,**_k): return {'matched':[],'unmatched':[],'errors':[],'count':0}
+  @staticmethod
+  def register_wrestler_image(*_a,**_k): pass
+  @staticmethod
+  def clear_wrestler_image(w): return False
+  @staticmethod
+  def image_bytes_for_wrestler(w): return None
+ class _CharSyncStub:
+  @staticmethod
+  def apply_registry_to_state(_s): pass
+  @staticmethod
+  def update_registry_from_state(*_a,**_k): pass
+  @staticmethod
+  def propagate_characters_to_all_sessions(*_a,**_k): return 0
+ class _RosterStoreStub:
+  @staticmethod
+  def ensure_wrestler_ids(roster): pass
+  @staticmethod
+  def read_custom_roster_sidecar(*_a): return []
+  @staticmethod
+  def sidecar_timestamp(*_a): return ''
+  @staticmethod
+  def combine_saved_rosters(a,b): return a or b
+  @staticmethod
+  def update_wrestler_image(*_a,**_k): pass
+  @staticmethod
+  def save_custom_roster_sidecar(*_a,**_k): pass
+ pic_sync=_PicSyncStub()
+ char_sync=_CharSyncStub()
+ roster_store=_RosterStoreStub()
+try:
+ import bfg_gm_mode as gm_mode
+except ImportError:
+ gm_mode=None
+try:
+ import bfg_fair_brands as fair_brands
+except ImportError:
+ fair_brands=None
 
 def find_ffmpeg():
  for cand in [shutil.which('ffmpeg'),'/usr/local/bin/ffmpeg','/opt/homebrew/bin/ffmpeg','/usr/bin/ffmpeg']:
@@ -114,11 +171,16 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] { color: var(--bb-text
 .scroll-box { max-height: 720px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
 .pic-mgr-panel { width: 100%; padding-bottom: 2rem; }
 .pic-mgr-panel [data-testid="stVerticalBlock"] { overflow: visible !important; }
+.pic-mgr-scroll { min-height: 400px; max-height: 82vh; overflow-y: auto; overflow-x: hidden; padding: 8px 4px 16px; border: 1px solid var(--bb-border,#333); border-radius: 12px; margin: 8px 0; -webkit-overflow-scrolling: touch; }
+.roster-scroll-box { max-height: 78vh; overflow-y: auto; overflow-x: hidden; padding-right: 6px; -webkit-overflow-scrolling: touch; }
+.selector-page-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.clean-selector-wrap { overflow: visible !important; position: relative; z-index: 1; }
 html, body, [data-testid="stAppViewContainer"], section.main, section.main .block-container {
  overflow-y: auto !important; height: auto !important; max-height: none !important;
 }
 .game-title-sm { margin-top: 4px !important; }
-div[data-testid="stSelectbox"], div[data-baseweb="select"] { overflow: visible !important; }
+div[data-testid="stSelectbox"], div[data-baseweb="select"], div[data-testid="stMultiSelect"] { overflow: visible !important; position: relative; z-index: 2; }
+div[data-baseweb="popover"], div[data-baseweb="popover"] > div { z-index: 999999 !important; }
 .tw-stat-row [data-testid="stMetric"] { background: linear-gradient(145deg,var(--bb-card1,#141414),var(--bb-card2,#0a0012)); border: 1px solid var(--bb-border,#333); border-radius: 12px; padding: 8px 10px; }
 .tw-preset-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
 .tw-feed-scroll { max-height: 72vh; overflow-y: auto; padding-right: 6px; }
@@ -176,11 +238,133 @@ div[data-testid="stSelectbox"], div[data-baseweb="select"] { overflow: visible !
 .cal-readable-card .cal-r-loc { color: #9ec8ff; font-weight: 600; }
 .cal-readable-card .cal-r-venue { color: #ffe8a8; font-weight: 700; }
 .cal-pl-pos { color: #3dd68c; font-weight: 800; }
+.cal-month-grid { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 16px; }
+.cal-month-grid th {
+ background: linear-gradient(180deg, var(--bb-card1, #1a1a24), var(--bb-card2, #121218));
+ color: var(--bb-muted, #c8c0e8); font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+ padding: 10px 8px; border-bottom: 2px solid var(--bb-border, #444); text-align: left;
+}
+.cal-month-grid td { padding: 8px 6px; border-bottom: 1px solid var(--bb-border, #2a2a35); vertical-align: middle; }
+.cal-month-grid tr:hover td { background: color-mix(in srgb, var(--bb-glow, #b026ff) 8%, transparent); }
+.cal-month-title { font-size: 18px; font-weight: 900; color: #fff; margin: 12px 0 6px; border-left: 4px solid var(--bb-hdr, #b026ff); padding-left: 10px; }
+.cal-planner-toolbar {
+ display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 0 0 14px;
+ padding: 12px 14px; border-radius: 10px; background: linear-gradient(135deg, #1a1a28, #12121a);
+ border: 1px solid var(--bb-border, #333);
+}
+.cal-planner-progress { flex: 1; min-width: 180px; }
+.cal-planner-progress-bar {
+ height: 8px; border-radius: 99px; background: #2a2a38; overflow: hidden; margin-top: 6px;
+}
+.cal-planner-progress-fill {
+ height: 100%; border-radius: 99px;
+ background: linear-gradient(90deg, var(--bb-hdr, #b026ff), #6b8cff);
+ transition: width .25s ease;
+}
+.cal-month-expander [data-testid="stExpander"] { border: 1px solid #2a2a38; border-radius: 10px; margin-bottom: 8px; }
+.cal-week-hdr { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #a8a0c8; padding: 2px 0 6px; }
+.cal-week-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.cal-week-dot-filled { background: #3dd68c; box-shadow: 0 0 6px #3dd68c88; }
+.cal-week-dot-empty { background: #444; }
+.cal-week-filled { color: #9ec8ff; font-size: 12px; }
+.cal-date-hint { color: #888; font-size: 11px; }
+.cal-guide-hero {
+ padding: 16px 18px; border-radius: 12px; margin-bottom: 14px;
+ background: linear-gradient(135deg, #1e1a2e 0%, #12121a 100%);
+ border: 1px solid #3a3058;
+}
+.cal-guide-hero h3 { margin: 0 0 6px; color: #fff; font-size: 20px; }
+.cal-guide-hero p { margin: 0; color: #b8b0d8; font-size: 13px; line-height: 1.5; }
+.cal-guide-section { margin: 4px 0; }
+.cal-guide-tip { color: #9ec8ff; font-size: 12px; }
+.cal-year-scroll-wrap {
+ max-height: 72vh; overflow-y: auto; overflow-x: hidden; padding-right: 8px;
+ scrollbar-width: thin; scrollbar-color: #5a4a88 #1a1a24;
+}
+.cal-year-scroll-wrap::-webkit-scrollbar { width: 8px; }
+.cal-year-scroll-wrap::-webkit-scrollbar-thumb { background: #5a4a88; border-radius: 8px; }
+.cal-editor-scroll {
+ max-height: 72vh; overflow-y: auto; overflow-x: hidden; padding: 4px 8px 12px 0;
+}
+.cal-month-card {
+ border: 1px solid #2e2e40; border-radius: 12px; padding: 12px 14px 14px; margin-bottom: 12px;
+ background: linear-gradient(180deg, #1a1a28 0%, #14141c 100%);
+}
+.cal-month-card-hdr {
+ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;
+ font-weight: 900; color: #fff; font-size: 15px;
+}
+.cal-month-card-sub { font-size: 11px; color: #9a92b8; font-weight: 600; }
+.cal-week-slot-filled [data-testid="stButton"] button {
+ border-color: #3dd68c !important; background: linear-gradient(180deg, #1a2e24, #142018) !important;
+}
+.cal-week-slot-selected [data-testid="stButton"] button {
+ border-color: var(--bb-hdr, #b026ff) !important; box-shadow: 0 0 12px #b026ff55;
+}
+.cal-summary-card {
+ border: 1px solid #3a3058; border-radius: 12px; padding: 14px; margin-bottom: 12px;
+ background: linear-gradient(135deg, #1e1a2e, #12121a);
+}
+.cal-preset-row { margin: 8px 0 12px; }
 .cal-pl-neg { color: #ff6b6b; font-weight: 800; }
 .cal-status-pill {
  display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 800;
  background: #252530; color: #eee;
 }
+.cal-status-pill.completed { background: rgba(192,192,200,.16); color: #d8d8e0; border: 1px solid #8a8a96; }
+.cal-status-pill.locked { background: rgba(120,80,255,.18); color: #c9b8ff; border: 1px solid #7a5cff; }
+.cal-status-pill.planned { background: rgba(110,110,125,.18); color: #c0c0cc; border: 1px solid #555; }
+.cal-status-pill.confirmed, .cal-status-pill.approved { background: rgba(61,214,140,.16); color: #3dd68c; border: 1px solid #3dd68c; }
+/* ---- premium polish: badges ---- */
+.bfg-badge {
+ display: inline-block; padding: 3px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 800;
+ letter-spacing: .04em; border: 1px solid transparent; line-height: 1.5; margin: 2px 4px 2px 0;
+ white-space: nowrap;
+}
+.bfg-badge.green { background: rgba(61,214,140,.14); color: #3dd68c; border-color: #3dd68c88; }
+.bfg-badge.gold { background: rgba(241,196,64,.14); color: #f1c440; border-color: #f1c44088; }
+.bfg-badge.red { background: rgba(255,92,92,.14); color: #ff5c5c; border-color: #ff5c5c88; }
+.bfg-badge.blue { background: rgba(90,150,255,.14); color: #7fb0ff; border-color: #5a8fd988; }
+.bfg-badge.purple { background: rgba(176,38,255,.14); color: #cf8aff; border-color: #b026ff88; }
+.bfg-badge.silver { background: rgba(200,200,210,.12); color: #d4d4dc; border-color: #9a9aa688; }
+.bfg-badge.gray { background: rgba(120,120,135,.14); color: #b8b8c4; border-color: #66667288; }
+/* ---- premium polish: header stat chips ---- */
+.hdr-stats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.hdr-chip {
+ display: inline-flex; flex-direction: column; gap: 1px; padding: 7px 14px; border-radius: 12px;
+ background: linear-gradient(150deg, rgba(255,255,255,.07), rgba(0,0,0,.4));
+ border: 1px solid var(--bb-border, #555); min-width: 86px;
+}
+.hdr-chip-label { font-size: 9.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--bb-muted, #aaa); }
+.hdr-chip-val { font-size: 16px; font-weight: 900; color: #fff; line-height: 1.15; }
+.hdr-chip-val.pos { color: #3dd68c; }
+.hdr-chip-val.warn { color: #f1c440; }
+.hdr-chip-val.neg { color: #ff5c5c; }
+/* ---- premium polish: dirt sheet feed ---- */
+.ds-card {
+ border-radius: 14px; padding: 13px 16px; margin-bottom: 10px;
+ background: linear-gradient(150deg, var(--bb-card1, #16161e), var(--bb-card2, #0b0b10));
+ border: 1px solid var(--bb-border, #333); border-left: 4px solid var(--ds-accent, #7a5cff);
+ box-shadow: 0 2px 14px rgba(0,0,0,.35);
+}
+.ds-acct { font-weight: 900; font-size: 14.5px; color: #fff; }
+.ds-handle { color: #9aa0a6; font-size: 12px; font-weight: 600; margin-left: 6px; }
+.ds-meta { color: var(--bb-muted, #aaa); font-size: 11.5px; margin-top: 1px; }
+.ds-text { font-size: 14.5px; line-height: 1.5; color: #f2f0fa; margin-top: 8px; }
+/* ---- premium polish: buttons + cards ---- */
+div.stButton>button { transition: transform .12s ease, box-shadow .15s ease, filter .15s ease !important; min-height: 40px; }
+div.stButton>button:hover { transform: translateY(-1px); filter: brightness(1.12); }
+div.stButton>button:active { transform: translateY(0); }
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px !important; transition: box-shadow .18s ease; }
+[data-testid="stVerticalBlockBorderWrapper"]:hover { box-shadow: 0 0 18px var(--bb-glow, #b026ff)2e; }
+[data-testid="stExpander"] { border-radius: 12px !important; }
+[data-testid="stExpander"] details { border-radius: 12px !important; border-color: var(--bb-border, #333) !important; }
+[data-testid="stTabs"] [data-baseweb="tab-list"] { gap: 4px; }
+[data-testid="stTabs"] button[aria-selected="true"] {
+ background: linear-gradient(135deg, var(--bb-glow, #b026ff)33, transparent) !important;
+ border-bottom: 3px solid var(--bb-accent, #d4af37) !important;
+}
+hr { border-color: var(--bb-border, #333)55 !important; }
 """
 
 @contextmanager
@@ -521,7 +705,7 @@ WOMEN_DIVISION_KW=('Women',"Women's")
 STARTING_BUDGET=150000000
 DEFAULT_SINGLES_DIV={'NXT':'I.C Title','SmackDown':'N.A Championship','WCW':'United States Title'}
 COMPANY_LOGISTICS_RULES={
- 'NXT':{'hotel_sponsor':None,'hotel_coverage':0,'transport_sponsor':None,'transport_coverage':0,'hotel_note':'NXT pays full hotel costs','transport_note':'NXT pays full transportation','merch_partners':['Mattel','Barbie','DC','Marvel','Netflix','Hollywood']},
+ 'NXT':{'hotel_sponsor':None,'hotel_coverage':0,'transport_sponsor':'Delta','transport_coverage':0.5,'hotel_note':'NXT pays full hotel costs','transport_note':'Delta covered 50% of transportation (balanced sponsor perk)','merch_partners':['Mattel','Barbie','DC','Marvel','Netflix','Hollywood']},
  'SmackDown':{'hotel_sponsor':'Marriott','hotel_coverage':1.0,'transport_sponsor':None,'transport_coverage':0,'hotel_note':'Marriott covered hotel costs','transport_note':'SmackDown pays transportation','merch_partners':['PRIME','New Balance','Sony','USA Network']},
  'WCW':{'hotel_sponsor':None,'hotel_coverage':0,'transport_sponsor':'Tesla/Mercedes','transport_coverage':1.0,'hotel_note':'WCW pays hotel unless sponsor covers event','transport_note':'Tesla/Mercedes covered transportation','merch_partners':['ESPN','CBS','Adidas','Pepsi','EA Sports']},
 }
@@ -1153,6 +1337,15 @@ def apply_random_event_record(ev):
 def money(x):
  try: return '${:,.0f}'.format(float(0 if x is None else x))
  except (TypeError, ValueError): return '—'
+def money_compact(x):
+ try: v=float(0 if x is None else x)
+ except (TypeError, ValueError): return '—'
+ sign='-' if v<0 else ''
+ v=abs(v)
+ if v>=1_000_000_000: return f'{sign}${v/1_000_000_000:.1f}B'
+ if v>=1_000_000: return f'{sign}${v/1_000_000:.1f}M'
+ if v>=1_000: return f'{sign}${v/1_000:.0f}K'
+ return f'{sign}${v:,.0f}'
 def fmt_display(v, default='—'):
  if v is None: return default
  if isinstance(v,str) and v.strip().lower() in ('','none','null'): return default
@@ -1242,24 +1435,79 @@ def safe_st_image(path,w=80,fallback_label='IMG',fallback_h=None):
  if path:
   try:
    from PIL import Image
-   with Image.open(path) as im:
+   from io import BytesIO
+   src=BytesIO(path) if isinstance(path,(bytes,bytearray)) else path
+   with Image.open(src) as im:
     im.load()
     st.image(im,width=w)
    return
   except Exception:
-   try: Path(path).unlink(missing_ok=True)
-   except OSError: pass
+   if isinstance(path,str):
+    try: Path(path).unlink(missing_ok=True)
+    except OSError: pass
  show_img_slot(fallback_label,w,fallback_h or (w-10 if w>50 else 70))
 
-def img_path(n):
- for e in ['.png','.jpg','.jpeg','.webp']:
-  p=Path('assets/wrestlers')/f'{slug(n)}{e}'
-  if p.exists() and image_file_ok(p): return str(p)
+def wrestler_image_slugs(name,wrestler_id=None):
+ """Lookup order: wrestler_id file, then display-name slug (legacy)."""
+ slugs=[]
+ if wrestler_id: slugs.append(str(wrestler_id))
+ w=find(name) if name else None
+ if w and w.get('wrestler_id') and w['wrestler_id'] not in slugs: slugs.append(w['wrestler_id'])
+ if name:
+  sn=slug(name)
+  if sn and sn not in slugs: slugs.append(sn)
+ return slugs
+
+def img_path(n,wrestler_id=None,wobj=None):
+ wref=wobj or (find_by_id(wrestler_id) if wrestler_id else None) or (find(n) if n else None)
+ saved=(wref or {}).get('image_path','')
+ if saved and Path(saved).exists() and image_file_ok(saved): return saved
+ for s in wrestler_image_slugs(n,wrestler_id or (wref or {}).get('wrestler_id')):
+  for e in ['.png','.jpg','.jpeg','.webp']:
+   p=Path('assets/wrestlers')/f'{s}{e}'
+   if p.exists() and image_file_ok(p): return str(p)
  return ''
+
+def resolve_wrestler_image(w=None,name=None,wrestler_id=None):
+ """Return ('path', path) or ('bytes', raw) for display — checks roster, disk, registry."""
+ wref=w or (find_by_id(wrestler_id) if wrestler_id else None) or (find(name) if name else None)
+ if not wref and name:
+  wref={'name':name,'wrestler_id':wrestler_id or ''}
+ p=img_path(wref.get('name'),wref.get('wrestler_id'),wref)
+ if p: return 'path',p
+ raw=pic_sync.image_bytes_for_wrestler(wref)
+ if raw: return 'bytes',raw
+ return None,None
+
+def wrestler_has_image(w):
+ if not w: return False
+ kind,_=resolve_wrestler_image(w=w)
+ return bool(kind)
+
+def touch_wrestler_image_meta(wrestler_id,company):
+ if not wrestler_id: return
+ st.session_state.setdefault('wrestler_image_meta',{})
+ st.session_state.wrestler_image_meta[wrestler_id]={'company':company,'updated_at':datetime.now(timezone.utc).isoformat()}
+
+def remove_wrestler_image_file(w):
+ if not w: return False
+ removed=pic_sync.clear_wrestler_image(w)
+ wid=w.get('wrestler_id')
+ if wid and wid in st.session_state.get('wrestler_image_meta',{}):
+  st.session_state.wrestler_image_meta.pop(wid,None)
+ return removed
+
+def show_wrestler_portrait(w=None,name=None,width=80,wrestler_id=None):
+ kind,src=resolve_wrestler_image(w=w,name=name,wrestler_id=wrestler_id)
+ if kind=='path':
+  safe_st_image(src,width,'IMG')
+ elif kind=='bytes':
+  safe_st_image(src,width,'IMG')
+ else:
+  st.markdown(f"<div style='width:{width}px;height:{width}px;border:1px dashed #b026ff;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#c9b6e8;background:#151520'>IMG</div>",unsafe_allow_html=True)
+
 def show_img(n,w=80):
- p=img_path(n)
- if p: safe_st_image(p,w,'IMG')
- else: st.markdown(f"<div style='width:{w}px;height:{w}px;border:1px dashed #b026ff;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#c9b6e8;background:#151520'>IMG</div>",unsafe_allow_html=True)
+ show_wrestler_portrait(name=n,width=w)
 def rec(w): return f"{w.get('wins',0)}-{w.get('losses',0)}-{w.get('draws',0)}"
 def align(a): return {'F':'Face','H':'Heel','N':'Neutral'}.get(a,a)
 def roster(company=None): return [w for w in st.session_state.roster if not company or w['company']==company]
@@ -1342,16 +1590,19 @@ def pool_for_poster(comp,poster_type,roster_filter='All'):
 
 PRIORITY_SELECTOR_NAMES=frozenset(['None','Vacant','','Place Holder'])
 ENTITY_SELECTOR_TYPES=['All','Wrestler','Tag Team','Faction','Staff','Company Account','Podcast Host']
+SELECTOR_PAGE_SIZE=45
+PIC_MGR_PAGE_SIZE=25
 
 def dropdown_scroll_css():
  return """<style>
-div[data-baseweb="popover"]{max-height:600px!important;overflow-y:auto!important;z-index:999999!important}
-ul[role="listbox"]{max-height:520px!important;overflow-y:auto!important}
-div[role="listbox"]{max-height:520px!important;overflow-y:auto!important}
+div[data-baseweb="popover"]{max-height:72vh!important;overflow-y:auto!important;overflow-x:hidden!important;z-index:999999!important}
+ul[role="listbox"],div[role="listbox"]{max-height:68vh!important;overflow-y:scroll!important;-webkit-overflow-scrolling:touch!important}
 [data-baseweb="select"]{z-index:999999!important}
-[data-testid="stSelectbox"]{overflow:visible!important}
-[data-testid="stVerticalBlock"]{overflow:visible!important}
-.block-container{overflow:visible!important}
+[data-testid="stSelectbox"],[data-testid="stMultiSelect"],.clean-selector-wrap{overflow:visible!important}
+[data-testid="stVerticalBlock"],[data-testid="stVerticalBlockBorderWrapper"]{overflow:visible!important}
+section.main,.main,section.main .block-container,.main .block-container{overflow-y:auto!important;overflow-x:visible!important;height:auto!important;max-height:none!important;padding-bottom:3rem!important}
+.bfg-card,[data-testid="stVerticalBlockBorderWrapper"],.pic-mgr-panel,.pic-mgr-scroll{overflow:visible!important}
+div[data-testid="stVerticalBlockBorderWrapper"]>div{overflow:visible!important}
 </style>"""
 
 def ensure_selector_css():
@@ -1419,19 +1670,44 @@ def clean_name_selector(label,key,current=None,options=None,extra_options=None,c
  pool=_build_selector_pool(options,extra_options,preserve_order)
  st.markdown('<div class="clean-selector-wrap">',unsafe_allow_html=True)
  search=''
- if show_search: search=st.text_input(label_search,value='',key=f'{key}_srch',placeholder='Type to filter — clear search to browse A–Z')
+ if show_search:
+  prev_srch=st.session_state.get(f'{key}_srch_prev','')
+  search=st.text_input(label_search,value='',key=f'{key}_srch',placeholder='Type to filter — e.g. CM, Rose, Punk (clear to browse A–Z)')
+  if search!=prev_srch:
+   st.session_state[f'{key}_pg']=1
+   st.session_state[f'{key}_srch_prev']=search
  browse_order=preserve_order or not search.strip()
  filtered=filter_name_list(pool,search,preserve_order=browse_order)
  if not filtered:
   st.caption('No matches — clear search or change company/type filters.')
+  st.markdown('</div>',unsafe_allow_html=True)
   if extra_options: return extra_options[0]
   return current
  pick_list=list(filtered)
  if current is not None and current not in pick_list: pick_list=[current]+[x for x in pick_list if x!=current]
- idx=pick_list.index(current) if current in pick_list else 0
- pick=st.selectbox(label_select,pick_list,index=min(idx,len(pick_list)-1),key=f'{key}_sel')
- if search.strip(): st.caption(f'{len(pick_list)} match(es)')
- elif len(pick_list)>15: st.caption(f'{len(pick_list)} names — open dropdown to scroll A–Z')
+ total=len(pick_list)
+ if total>SELECTOR_PAGE_SIZE:
+  n_pages=max(1,(total+SELECTOR_PAGE_SIZE-1)//SELECTOR_PAGE_SIZE)
+  cur_pg=int(st.session_state.get(f'{key}_pg',1))
+  if cur_pg>n_pages: cur_pg=1; st.session_state[f'{key}_pg']=1
+  pc1,pc2,pc3,pc4=st.columns([1.2,.35,.35,.5])
+  with pc1: st.caption(f'**{total}** names · page **{cur_pg}/{n_pages}** · search narrows list (e.g. "Rose", "CM")')
+  with pc2:
+   if st.button('◀ Prev',key=f'{key}_pg_prev',disabled=cur_pg<=1): st.session_state[f'{key}_pg']=max(1,cur_pg-1); st.rerun()
+  with pc3:
+   if st.button('Next ▶',key=f'{key}_pg_next',disabled=cur_pg>=n_pages): st.session_state[f'{key}_pg']=min(n_pages,cur_pg+1); st.rerun()
+  with pc4:
+   pg=st.number_input('Page',1,n_pages,cur_pg,key=f'{key}_pg',label_visibility='collapsed',help=f'{SELECTOR_PAGE_SIZE} names per page')
+  start=(int(pg)-1)*SELECTOR_PAGE_SIZE
+  page_slice=pick_list[start:start+SELECTOR_PAGE_SIZE]
+  display_list=page_slice
+ else:
+  display_list=pick_list
+  if total>15: st.caption(f'**{total}** names — type in search to filter, or scroll the dropdown')
+ idx=display_list.index(current) if current in display_list else 0
+ pick=st.selectbox(label_select,display_list,index=min(idx,len(display_list)-1),key=f'{key}_sel')
+ if search.strip(): st.caption(f'{total} match(es) for "{search.strip()}"')
+ st.markdown('</div>',unsafe_allow_html=True)
  return pick
 
 def clean_name_multiselect(label,key,options=None,company=None,entity_type=None,company_filter=False,type_filter=False,default_company='NXT',default_entity='All',label_search='Search name…'):
@@ -1451,10 +1727,41 @@ def clean_name_multiselect(label,key,options=None,company=None,entity_type=None,
   co=co or default_company; et=et or default_entity
  if options is None: options=clean_name_pool(co,et)
  pool=sorted(set(options),key=str.lower)
- search=st.text_input(label_search,value='',key=f'{key}_ms',placeholder='Type to filter — clear for full list')
+ prev_ms=st.session_state.get(f'{key}_ms_prev','')
+ search=st.text_input(label_search,value='',key=f'{key}_ms',placeholder='Type to filter — e.g. CM, Rose (required for long lists)')
+ if search!=prev_ms:
+  st.session_state[f'{key}_mpg']=1
+  st.session_state[f'{key}_ms_prev']=search
  filtered=filter_name_list(pool,search,preserve_order=not search.strip())
- if not filtered: st.caption('No matches.'); return []
- return st.multiselect(label,filtered,key=f'{key}_mul')
+ if not filtered:
+  st.caption('No matches — clear search or change filters.')
+  return []
+ total=len(filtered)
+ if total>SELECTOR_PAGE_SIZE and not search.strip():
+  st.caption(f'**{total}** names — type in search to narrow the list (e.g. "CM", "Rose").')
+ if total>SELECTOR_PAGE_SIZE:
+  n_pages=max(1,(total+SELECTOR_PAGE_SIZE-1)//SELECTOR_PAGE_SIZE)
+  cur_pg=int(st.session_state.get(f'{key}_mpg',1))
+  if cur_pg>n_pages: cur_pg=1; st.session_state[f'{key}_mpg']=1
+  mp1,mp2,mp3,mp4=st.columns([1.2,.35,.35,.5])
+  with mp1: st.caption(f'**{total}** matches · page **{cur_pg}/{n_pages}**')
+  with mp2:
+   if st.button('◀',key=f'{key}_mpg_prev',disabled=cur_pg<=1): st.session_state[f'{key}_mpg']=max(1,cur_pg-1); st.rerun()
+  with mp3:
+   if st.button('▶',key=f'{key}_mpg_next',disabled=cur_pg>=n_pages): st.session_state[f'{key}_mpg']=min(n_pages,cur_pg+1); st.rerun()
+  with mp4:
+   mpg=st.number_input('Pg',1,n_pages,cur_pg,key=f'{key}_mpg',label_visibility='collapsed')
+  start=(int(mpg)-1)*SELECTOR_PAGE_SIZE
+  show_list=filtered[start:start+SELECTOR_PAGE_SIZE]
+ else:
+  show_list=filtered
+ picked=st.session_state.setdefault(f'{key}_picked',[])
+ on_page=[x for x in picked if x in show_list]
+ sel=st.multiselect(label,show_list,default=on_page,key=f'{key}_mul')
+ merged=[x for x in picked if x not in show_list]+sel
+ st.session_state[f'{key}_picked']=merged
+ if total>SELECTOR_PAGE_SIZE: st.caption(f'Selected ({len(merged)}): {", ".join(merged[:8])}{"…" if len(merged)>8 else ""}')
+ return merged
 
 def searchable_select(label,names,key,current=None,extra_options=None,per_page=24,none_option=None,preserve_order=False,**kwargs):
  kwargs.pop('per_page',None); kwargs.pop('none_option',None)
@@ -1979,14 +2286,34 @@ def section_header(title, comp=None):
  t=get_brand_tokens(comp)
  st.markdown(f'<div class="section-header" style="border-color:{t["hdr"]}">{html_escape(title)}</div>',unsafe_allow_html=True)
 
+def _hdr_tone(v,good=70,warn=45):
+ try: v=int(v)
+ except Exception: return ''
+ if v>=good: return ' pos'
+ if v<warn: return ' neg'
+ return ' warn'
+
 def render_brand_badge(comp):
  t=get_brand_tokens(comp)
  lore=(BRAND_THEMES.get(comp,{}) or {}).get('lore','')
  sub=(lore[:96]+'…') if len(lore)>96 else lore
+ chips=[('Week',str(st.session_state.get('week',0)),'')]
+ try:
+  fin=st.session_state.get('company_finance',{}).get(comp,{})
+  bank=int(fin.get('current_budget',st.session_state.get('company_budgets',{}).get(comp,0)) or 0)
+  chips.append(('Bank',money_compact(bank),' pos' if bank>=60_000_000 else (' neg' if bank<20_000_000 else ' warn')))
+ except Exception: pass
+ if gm_mode and comp in PLAYABLE:
+  try:
+   trust,_f=gm_mode.gm_trust(comp); ds,_h2=gm_mode.dirt_sheet_approval(comp)
+   chips.append(('GM Trust',str(trust),_hdr_tone(trust)))
+   chips.append(('Dirt Sheet',str(ds),_hdr_tone(ds)))
+  except Exception: pass
+ chips_html=''.join(f"<span class='hdr-chip'><span class='hdr-chip-label'>{html_escape(l)}</span><span class='hdr-chip-val{cls}'>{html_escape(v)}</span></span>" for l,v,cls in chips)
  st.markdown(
-  f"<div class='page-top-bar'><div class='brand-badge' style='--bb-glow:{t['glow']};--bb-accent:{t['accent']};--bb-border:{t['border']};--bb-muted:{t['muted']}'><span class='brand-badge-dot'></span>"
-  f"<div><div class='brand-badge-name'>{html_escape(comp)}</div><div class='brand-badge-sub'>{html_escape(t.get('tagline',''))} · {html_escape(sub)}</div></div>"
-  f"<span class='brand-badge-week'>Week {st.session_state.week}</span></div></div>",
+  f"<div class='page-top-bar'><div class='brand-badge' style='--bb-glow:{t['glow']};--bb-accent:{t['accent']};--bb-border:{t['border']};--bb-muted:{t['muted']};flex:1'><span class='brand-badge-dot'></span>"
+  f"<div style='flex:1'><div class='brand-badge-name'>{html_escape(comp)}</div><div class='brand-badge-sub'>{html_escape(t.get('tagline',''))} · {html_escape(sub)}</div></div>"
+  f"<span class='hdr-stats'>{chips_html}</span></div></div>",
   unsafe_allow_html=True,
  )
 
@@ -2000,6 +2327,7 @@ def render_kpi_row(items):
   )
 
 def render_page_shell(title, comp=None, subtitle='', show_meter=True, meter_compact=False, use_brand_tabs=False, tabs_label='Select Brand', show_badge=True):
+ ensure_selector_css()
  comp=comp or st.session_state.get('active_brand','NXT')
  if not use_brand_tabs:
   inject_brand_theme(comp)
@@ -2191,6 +2519,30 @@ def session_week_state_file():
 def session_pending_trades_file():
  return session_storage_dir()/'pending_trades.json'
 
+def session_custom_roster_file():
+ return session_storage_dir()/'custom_roster.json'
+
+def save_custom_roster_sidecar():
+ """Persist user-added roster members to a dedicated file."""
+ roster_store.write_custom_roster_sidecar(session_custom_roster_file(),st.session_state.get('roster',[]),updated_at=st.session_state.get('roster_updated_at'))
+
+def persist_roster_addition(comp,wrestler):
+ """Add a custom roster member and write to disk immediately."""
+ if not can_edit_company(comp): return False,'no_permission'
+ w=dict(wrestler or {})
+ roster_store.prepare_new_custom_wrestler(w,st.session_state.get('player_name',''))
+ roster_store.upsert_roster_member(st.session_state.roster,w)
+ roster_store.ensure_custom_roster_index(st.session_state)
+ fix_roster_divisions(); apply_default_hometowns(); sync_company_payroll_stats()
+ st.session_state.roster_updated_at=datetime.now().isoformat(timespec='seconds')
+ touch_universe_meta(comp)
+ try:
+  save_custom_roster_sidecar()
+  save_universe()
+ except Exception as ex:
+  return False,str(ex)
+ return True,w.get('name','')
+
 def attach_session_fields(record):
  if not isinstance(record,dict): return record
  record['session_id']=get_session_id()
@@ -2206,6 +2558,123 @@ GM_ROLE_OPTIONS={
  'SmackDown GM':('SmackDown GM','SmackDown'),
  'WCW GM':('WCW GM','WCW'),
 }
+
+def request_continue_session(session_id,player_name='Joshua'):
+ """Continue a saved game without invite codes."""
+ st.session_state._pending_continue_sid=(session_id or '').strip()
+ st.session_state._pending_quick_name=(player_name or 'Joshua').strip()
+ st.session_state.pop('_login_error',None)
+ st.rerun()
+
+def _execute_continue_sid(session_id,player_name='Joshua'):
+ mp.init_storage()
+ sid=(session_id or '').strip()
+ if not sid:
+  st.session_state._login_error='No session id to continue.'
+  return False
+ meta=mp.load_session_meta(sid) or {} if sid!='local' else {}
+ ensure_week_progress_state()
+ st.session_state.logged_in=True
+ st.session_state.player_name=(player_name or meta.get('created_by') or 'Returning GM').strip()
+ st.session_state.role='Admin'
+ st.session_state.assigned_company='All'
+ st.session_state.session_id=sid
+ st.session_state.game_name=meta.get('game_name','Continued Game')
+ st.session_state.invite_code=meta.get('invite_code','')
+ st.session_state._universe_loaded=False
+ st.session_state.gate_screen=''
+ for c in PLAYABLE:
+  st.session_state.player_assignments[c]=st.session_state.player_assignments.get(c) or '—'
+ st.rerun()
+ return True
+
+def request_quick_login(invite_code='BFG-9309',player_name='Joshua'):
+ """Queue one-click login — processed at top of main() on next rerun."""
+ st.session_state._pending_quick_login=(invite_code or 'BFG-9309').strip()
+ st.session_state._pending_quick_name=(player_name or 'Joshua').strip()
+ st.session_state.pop('_login_error',None)
+ st.rerun()
+
+def _execute_quick_login(invite_code,player_name='Joshua'):
+ """Lightweight login — load universe on the next main() pass."""
+ mp.init_storage()
+ sid,inv=resolve_local_session_id(invite_code)
+ invite_code=inv or invite_code
+ if not sid:
+  saves=mp.list_saved_sessions()
+  hint=', '.join(f"{s.get('game_name')} ({s.get('invite_code','local')})" for s in saves[:4]) if saves else 'none found'
+  st.session_state._login_error=f'**{invite_code}** not found on this server. Saved here: {hint}. Run the app on the same computer where you created the game.'
+  return False
+ meta=mp.load_session_meta(sid) or {}
+ ensure_week_progress_state()
+ st.session_state.logged_in=True
+ st.session_state.player_name=(player_name or meta.get('created_by') or 'Admin').strip()
+ st.session_state.role='Admin'
+ st.session_state.assigned_company='All'
+ st.session_state.session_id=sid
+ st.session_state.game_name=meta.get('game_name','')
+ st.session_state.invite_code=meta.get('invite_code',invite_code)
+ st.session_state._universe_loaded=False
+ st.session_state.gate_screen=''
+ for c in PLAYABLE:
+  st.session_state.player_assignments[c]=st.session_state.player_assignments.get(c) or '—'
+ st.rerun()
+ return True
+
+def quick_enter_session(invite_code='BFG-9309',player_name='Joshua'):
+ request_quick_login(invite_code,player_name)
+
+def request_join_with_codes(invite_code,access_code,player_name='Joshua'):
+ """Queue invite + brand code login (NXT / WCW / SmackDown / Admin)."""
+ st.session_state._pending_join_codes=(
+  (invite_code or '').strip(),
+  (access_code or '').strip().upper().replace(' ',''),
+  (player_name or 'Joshua').strip(),
+ )
+ st.session_state.pop('_login_error',None)
+ st.session_state._manual_logout=True
+ st.rerun()
+
+def _execute_join_with_codes(invite_code,access_code,player_name='Joshua'):
+ info,err=mp.join_private_session(invite_code,player_name,access_code)
+ if err:
+  st.session_state._login_error=err
+  return False
+ apply_player_session(
+  info['player_name'],info['role'],info['assigned_company'],
+  session_id=info['session_id'],game_name=info['game_name'],invite_code=info['invite_code'],
+ )
+ st.session_state._manual_logout=False
+ st.session_state._universe_loaded=False
+ st.session_state.gate_screen=''
+ st.toast(f"Joined {info.get('game_name','game')} as {info['role']}")
+ st.rerun()
+ return True
+
+def resolve_local_session_id(invite_code=''):
+ """Find a session on this computer by invite or by saved universe file."""
+ mp.init_storage()
+ code=(invite_code or '').strip()
+ if code:
+  sid=mp.resolve_invite(code)
+  if sid: return sid,code
+ for s in mp.list_saved_sessions():
+  if code and s.get('invite_code')==code:
+   return s['session_id'],code
+  if s.get('has_universe') and s.get('invite_code'):
+   return s['session_id'],s.get('invite_code','')
+ return '',''
+
+def try_auto_login():
+ """Skip intro/login when a local easywork save exists (unless user logged out)."""
+ if st.session_state.get('logged_in'): return
+ if st.session_state.get('_manual_logout'): return
+ if st.session_state.get('gate_screen') in ('tutorial','continue'): return
+ for code in ('BFG-6051','BFG-9309','BFG-6956'):
+  sid,inv=resolve_local_session_id(code)
+  if sid:
+   _execute_quick_login(inv or code,'Joshua')
+   return
 
 def apply_player_session(player_name,role,company,session_id='',game_name='',invite_code=''):
  ensure_week_progress_state()
@@ -2225,12 +2694,14 @@ def apply_player_session(player_name,role,company,session_id='',game_name='',inv
   for c in PLAYABLE:
    st.session_state.player_assignments[c]=st.session_state.player_assignments.get(c) or '—'
  st.session_state._universe_loaded=False
+ st.session_state.pop('_load_warning',None)
  try:
   load_universe_from_disk()
  except Exception as ex:
   st.session_state._universe_loaded=True
-  raise RuntimeError(f'Joined session but could not load save data: {ex}') from ex
- st.session_state._universe_loaded=True
+  st.session_state._load_warning=f'Logged in, but some save data could not load: {ex}'
+ else:
+  st.session_state._universe_loaded=True
  try:
   save_week_state()
  except Exception:
@@ -2249,6 +2720,38 @@ def ensure_multiplayer_state():
 
 def is_admin():
  return st.session_state.get('role')=='Admin'
+
+def admin_save_mode_active():
+ """Admin save tools — full universe write, sync all sessions, load saves."""
+ return is_admin() or bool(st.session_state.get('_admin_save_mode'))
+
+def enable_admin_save_mode():
+ """Local-only: unlock Save Center admin tools without re-entering codes."""
+ st.session_state._admin_save_mode=True
+ st.session_state.role='Admin'
+ st.session_state.assigned_company='All'
+ st.session_state.player_name=st.session_state.get('player_name') or 'Admin'
+ st.toast('Admin Save Mode enabled on this computer.')
+
+def render_admin_save_mode_panel():
+ """Always-visible Save Center block — explains role and unlocks admin tools."""
+ with bfg_card('Admin Save Mode'):
+  role=st.session_state.get('role','') or 'Not logged in'
+  company=st.session_state.get('assigned_company','') or '—'
+  if admin_save_mode_active():
+   st.success(f'**Active** — {st.session_state.get("player_name","GM")} · **{role}** · **{company}**')
+   st.caption('You can save the full universe, sync pictures/characters to every session, and load backup files.')
+  else:
+   st.warning(f'**Off** — you are logged in as **{role}** ({company}). Brand GMs cannot use full-universe save tools.')
+   st.caption('Admin Save Mode is required for **Sync pictures/characters**, **Load Save**, and **Save universe to disk**. Download still works for everyone.')
+   if st.session_state.get('logged_in'):
+    if st.button('Enable Admin Save Mode (this computer)',type='primary',key='sc_enable_admin_save'):
+     enable_admin_save_mode()
+     st.rerun()
+    if st.button('Re-enter as Admin (BFG-9309)',key='sc_reenter_admin'):
+     request_quick_login('BFG-9309',st.session_state.get('player_name','Joshua'))
+   else:
+    st.info('Log in first — use **ENTER EASYWORK NOW** on the intro screen, or join with your **Admin code**.')
 
 def can_edit_company(company):
  if is_admin(): return True
@@ -2312,6 +2815,102 @@ def render_storage_status_banner(where='sidebar'):
  else:
   st.warning(warn)
 
+_CHAMP_PERSIST_KEYS=('champions','title_prestige','champion_meta','champion_history','title_defense_history')
+_ROSTER_PERSIST_KEYS=('roster','rosters','wrestler_name_history','wrestler_image_meta')
+_CHAR_PERSIST_KEYS=('character_bible','staff_character_bible','nxt_unfiltered_hosts')
+
+def _save_timestamp(ts):
+ """Normalize save timestamps to naive UTC so aware/naive values compare safely."""
+ if not ts: return datetime.min
+ try:
+  dt=datetime.fromisoformat(str(ts).replace('Z','+00:00'))
+  if dt.tzinfo is not None:
+   dt=dt.astimezone(timezone.utc).replace(tzinfo=None)
+  return dt
+ except Exception: return datetime.min
+
+def _read_local_universe_file(ufile,sid):
+ if not ufile.exists(): return None
+ try: data=json.loads(ufile.read_text(encoding='utf-8'))
+ except (json.JSONDecodeError,OSError): return None
+ if sid!='local' and data.get('session_id') and data.get('session_id')!=sid: return None
+ return data
+
+def _champ_source_timestamp(src):
+ """Champion rows can be older than the latest calendar/roster save in the same blob."""
+ return _save_timestamp(src.get('champions_updated_at') or src.get('last_updated_at'))
+
+def _roster_source_timestamp(src,sidecar_ts=''):
+ """Roster additions can be newer than unrelated universe saves in the same blob."""
+ return max(_save_timestamp(src.get('roster_updated_at') or src.get('last_updated_at')),_save_timestamp(sidecar_ts))
+
+def _char_source_timestamp(src):
+ return _save_timestamp(src.get('characters_updated_at') or src.get('last_updated_at'))
+
+def _merge_universe_payloads(sources,sidecar_members=None,sidecar_ts=''):
+ """Pick newest full save; champion + roster data from freshest dedicated writes."""
+ if not sources and not sidecar_members: return None
+ ordered=sorted(sources,key=lambda d:_save_timestamp(d.get('last_updated_at')),reverse=True) if sources else []
+ merged=json.loads(json.dumps(ordered[0])) if ordered else {}
+ best_champ_ts=datetime.min
+ for src in sources:
+  best_champ_ts=max(best_champ_ts,_champ_source_timestamp(src))
+ for key in _CHAMP_PERSIST_KEYS:
+  best=None; best_ts=datetime.min
+  for src in sources:
+   val=src.get(key)
+   if not val: continue
+   ts=_champ_source_timestamp(src)
+   if ts>=best_ts: best=val; best_ts=ts
+  if best is not None: merged[key]=json.loads(json.dumps(best))
+ if best_champ_ts>datetime.min:
+  merged['champions_updated_at']=best_champ_ts.isoformat(timespec='seconds')
+ best_roster=None; best_roster_ts=datetime.min
+ for src in sources:
+  val=src.get('roster')
+  if not val: continue
+  ts=_roster_source_timestamp(src,sidecar_ts)
+  if ts>=best_roster_ts: best_roster=val; best_roster_ts=ts
+ if sidecar_members:
+  combined=roster_store.combine_saved_rosters(best_roster or merged.get('roster',[]),sidecar_members)
+  if combined:
+   merged['roster']=json.loads(json.dumps(combined,default=str))
+   if sidecar_ts: merged['roster_updated_at']=sidecar_ts
+ elif best_roster is not None:
+  merged['roster']=json.loads(json.dumps(best_roster,default=str))
+  if best_roster_ts>datetime.min:
+   merged['roster_updated_at']=best_roster_ts.isoformat(timespec='seconds')
+ for key in _ROSTER_PERSIST_KEYS:
+  if key=='roster': continue
+  best=None; best_ts=datetime.min
+  for src in sources:
+   val=src.get(key)
+   if not val: continue
+   ts=_roster_source_timestamp(src,sidecar_ts)
+   if ts>=best_ts: best=val; best_ts=ts
+  if best is not None: merged[key]=json.loads(json.dumps(best,default=str))
+ best_char_ts=datetime.min
+ for src in sources:
+  best_char_ts=max(best_char_ts,_char_source_timestamp(src))
+ for key in _CHAR_PERSIST_KEYS:
+  merged_chars={}
+  for src in sources:
+   val=src.get(key) or {}
+   ts=_char_source_timestamp(src)
+   for name,profile in val.items():
+    if not name or not isinstance(profile,dict): continue
+    prev=merged_chars.get(name)
+    if not prev or ts>=_save_timestamp(prev.get('_merge_ts','')):
+     merged_chars[name]=json.loads(json.dumps(profile,default=str))
+     merged_chars[name]['_merge_ts']=ts.isoformat(timespec='seconds')
+  if merged_chars:
+   for profile in merged_chars.values():
+    profile.pop('_merge_ts',None)
+   merged[key]=merged_chars
+ if best_char_ts>datetime.min:
+  merged['characters_updated_at']=best_char_ts.isoformat(timespec='seconds')
+ return merged if merged else None
+
 def load_universe_from_disk():
  root=session_storage_dir()
  root.mkdir(parents=True,exist_ok=True)
@@ -2319,27 +2918,29 @@ def load_universe_from_disk():
  wfile=session_week_state_file()
  pfile=session_pending_trades_file()
  sid=get_session_id()
- sb_uni=sb.load_merged_universe(sid) if sid!='local' and sb.supabase_configured() else None
- if sb_uni:
-  for k,v in sb_uni.items():
-   if k in ('last_updated_by','last_updated_at','session_id'): continue
-   st.session_state[k]=v
- elif (db_uni:=mp.db_load_blob('mp_universe',sid) if sid!='local' else None):
-  for k,v in db_uni.items():
-   if k in ('last_updated_by','last_updated_at','session_id'): continue
-   st.session_state[k]=v
+ sources=[]
+ has_supabase_source=False
+ if sid!='local' and sb.supabase_configured():
+  if (sb_uni:=sb.load_merged_universe(sid)):
+   sources.append(sb_uni); has_supabase_source=True
+ if sid!='local':
+  if (db_uni:=mp.db_load_blob('mp_universe',sid)): sources.append(db_uni)
+ local=_read_local_universe_file(ufile,sid)
+ if local: sources.append(local)
  elif ufile.exists():
-  try:
-   data=json.loads(ufile.read_text(encoding='utf-8'))
+  try: json.loads(ufile.read_text(encoding='utf-8'))
   except (json.JSONDecodeError,OSError) as ex:
-   st.error(f'Universe save file is corrupted or unreadable: {ex}')
-   return
-  if sid!='local' and data.get('session_id') and data.get('session_id')!=sid:
-   st.error('Session mismatch — wrong universe file.'); return
-  for k,v in data.items():
-   if k in ('last_updated_by','last_updated_at','session_id'): continue
-   st.session_state[k]=v
- if not sb_uni:
+   st.error(f'Universe save file is corrupted or unreadable: {ex}'); return
+  st.error('Session mismatch — wrong universe file.'); return
+ sidecar_members=roster_store.read_custom_roster_sidecar(session_custom_roster_file())
+ sidecar_ts=roster_store.sidecar_timestamp(session_custom_roster_file())
+ merged=_merge_universe_payloads(sources,sidecar_members=sidecar_members,sidecar_ts=sidecar_ts)
+ if not merged:
+  return
+ for k,v in merged.items():
+  if k in ('last_updated_by','last_updated_at','session_id'): continue
+  st.session_state[k]=v
+ if not has_supabase_source:
   db_ws=mp.db_load_blob('mp_week_state',sid) if sid!='local' else None
   if db_ws:
    st.session_state.week_progress=db_ws.get('companies',default_week_progress())
@@ -2353,7 +2954,7 @@ def load_universe_from_disk():
    st.session_state.week_progress=ws.get('companies',default_week_progress())
    st.session_state.player_assignments=ws.get('player_assignments',st.session_state.player_assignments)
    if 'current_week' in ws: st.session_state.week=int(ws['current_week'])
- if not sb_uni:
+ if not has_supabase_source:
   db_tr=mp.db_load_blob('mp_pending_trades',sid) if sid!='local' else None
   if db_tr is not None:
    st.session_state.pending_trades=db_tr
@@ -2369,7 +2970,16 @@ def load_universe_from_disk():
   book_show.migrate_weekly_history_to_archive()
  except Exception:
   pass
- ensure_wrestler_ids()
+ apply_merged_roster(st.session_state.get('roster',[]))
+ before_linked=sum(1 for w in st.session_state.roster if isinstance(w,dict) and w.get('image_path'))
+ pic_stats=pic_sync.repair_all_pictures(st.session_state.roster)
+ after_linked=pic_stats.get('linked_count',before_linked)
+ st.session_state.setdefault('wrestler_image_meta',{})
+ st.session_state.wrestler_image_meta.update(pic_sync.registry_to_image_meta())
+ char_sync.apply_registry_to_state(st.session_state)
+ if st.session_state.get('logged_in') and (after_linked>before_linked or pic_stats.get('restored_files')):
+  try: save_universe()
+  except Exception: pass
  st.session_state._universe_loaded=True
 
 def sync_session_from_storage(light=False):
@@ -2421,18 +3031,40 @@ def save_universe(data=None):
   root.mkdir(parents=True,exist_ok=True)
   save_keys=_universe_save_keys()
   payload=data or {k:st.session_state[k] for k in save_keys if k in st.session_state}
+  for key in _CHAMP_PERSIST_KEYS+_ROSTER_PERSIST_KEYS+_CHAR_PERSIST_KEYS:
+   if key in st.session_state:
+    payload[key]=json.loads(json.dumps(st.session_state[key],default=str))
+  save_custom_roster_sidecar()
+  try:
+   char_sync.update_registry_from_state(
+    st.session_state.get('character_bible'),
+    st.session_state.get('staff_character_bible'),
+    st.session_state.get('nxt_unfiltered_hosts'),
+   )
+  except Exception:
+   pass
   payload['session_id']=get_session_id()
   payload['game_name']=st.session_state.get('game_name','')
   payload['last_updated_by']=st.session_state.get('player_name','')
   payload['last_updated_at']=datetime.now().isoformat(timespec='seconds')
-  session_universe_file().write_text(json.dumps(payload,indent=2,default=str),encoding='utf-8')
+  if st.session_state.get('champions_updated_at'):
+   payload['champions_updated_at']=st.session_state.champions_updated_at
+  if st.session_state.get('roster_updated_at'):
+   payload['roster_updated_at']=st.session_state.roster_updated_at
+  if st.session_state.get('characters_updated_at'):
+   payload['characters_updated_at']=st.session_state.characters_updated_at
+  blob=json.dumps(payload,indent=2,default=str)
+  session_universe_file().write_text(blob,encoding='utf-8')
   sid=get_session_id()
   save_week_state()
   save_pending_trades()
   if sid!='local':
    mp.db_save_blob('mp_universe',sid,payload)
    if sb.supabase_configured():
-    sb.sync_session_saves(sid,payload,week_state=load_week_state(),pending_trades=st.session_state.get('pending_trades',[]))
+    try:
+     sb.sync_session_saves(sid,payload,week_state=load_week_state(),pending_trades=st.session_state.get('pending_trades',[]))
+    except Exception as cloud_ex:
+     st.session_state._last_cloud_save_warning=str(cloud_ex)
   if get_session_id()=='local' and st.session_state.get('logged_in') and not sb.supabase_configured():
    st.session_state.mp_show_local_warning=True
   autosave.set_autosave_status('saved')
@@ -2441,7 +3073,7 @@ def save_universe(data=None):
   raise
 
 def _universe_save_keys():
- return ['roster','wrestler_name_history','champions','title_prestige','champion_meta','champion_history','title_defense_history','team_profiles','factions','bank','week','month','year','character_bible','staff_character_bible','company_lore','company_profiles','company_budgets','company_finance','finance_ledger','show_finance_reports','weekly_history','saved_show','booking_mode','ai_booked_show','show_user_edited','long_story_draft','book_show_drafts','book_show_archive','last_story_analysis','last_grade','story_parse','twitter_posts','schedule_calendar','calendar_locked','calendar_ai_notes','news_feed','random_event_history','storyline_flags','storylines','sponsor_objectives','twitter_drama','power_rankings','previous_power_rankings','power_ranking_history','yearly_attractions','attractions_locked','attraction_year','attraction_history','departed','staff','appearance_history','trade_history','rivalries','test_event_preview','tag_team_overrides','custom_tag_teams','roster_show_staff','breakup_history','former_tag_teams','film_projects','logistics_reports','cameo_library','debut_history','debut_warnings','rankings_include_not_debuted','confirmed_story_debuts','free_agency_pool','negotiation_history','contract_warnings','exclusive_activity_history','exclusive_generated_ideas','exclusive_violations','nxt_unfiltered_hosts','nxt_unfiltered_episodes','nxt_unfiltered_draft','last_nxt_unfiltered','podcast_hosts_booking_enabled','pending_trades','money_meter_flash','finance_opening_applied','weekly_performance_index','company_crisis','bidding_wars','brand_loyalty_history','descriptor_recent','twitter_recruitment_history','twitter_manual_gm_response','game_name','player_assignments','week_progress']
+ return ['roster','rosters','wrestler_name_history','wrestler_image_meta','champions','title_prestige','champion_meta','champion_history','title_defense_history','team_profiles','factions','bank','week','month','year','character_bible','staff_character_bible','company_lore','company_profiles','company_budgets','company_finance','finance_ledger','show_finance_reports','weekly_history','saved_show','booking_mode','ai_booked_show','show_user_edited','long_story_draft','book_show_drafts','book_show_archive','last_story_analysis','last_grade','story_parse','twitter_posts','schedule_calendar','calendar_locked','calendar_ai_notes','news_feed','random_event_history','storyline_flags','storylines','sponsor_objectives','twitter_drama','power_rankings','previous_power_rankings','power_ranking_history','yearly_attractions','attractions_locked','attraction_year','attraction_history','departed','staff','appearance_history','trade_history','rivalries','test_event_preview','tag_team_overrides','custom_tag_teams','roster_show_staff','breakup_history','former_tag_teams','film_projects','logistics_reports','cameo_library','debut_history','debut_warnings','rankings_include_not_debuted','confirmed_story_debuts','free_agency_pool','negotiation_history','contract_warnings','exclusive_activity_history','exclusive_generated_ideas','exclusive_violations','nxt_unfiltered_hosts','nxt_unfiltered_episodes','nxt_unfiltered_draft','last_nxt_unfiltered','podcast_hosts_booking_enabled','pending_trades','money_meter_flash','finance_opening_applied','weekly_performance_index','company_crisis','bidding_wars','brand_loyalty_history','descriptor_recent','twitter_recruitment_history','twitter_manual_gm_response','game_name','player_assignments','week_progress','gm_trust_adj','locker_chem_adj','dirt_sheet_adj','gm_owner_goal_status','media_question_log','trade_block','calendar_approval_results','dirt_sheet_names','dev_focus']
 
 def load_universe():
  load_universe_from_disk()
@@ -2482,6 +3114,9 @@ def save_show(company,week,show_data):
  st.session_state.weekly_history.append(hist)
  wp=st.session_state.week_progress[company]
  wp.update({'status':'Completed','locked':True,'show_rating':hist.get('final_rating') or hist.get('episode_rating'),'episode_rating':hist.get('episode_rating',hist.get('final_rating')),'attendance':int((hist.get('logistics') or {}).get('attendance',hist.get('viewership',0)//1.2) or 0),'viewership':int(hist.get('viewership',0)),'profit_loss':hist.get('profit',0),'dirt_sheet':(hist.get('dirt_sheet_review') or '')[:120],'gm_player':st.session_state.get('player_name',''),'last_updated_by':st.session_state.get('player_name',''),'last_updated_at':date.today().isoformat()})
+ if gm_mode:
+  try: gm_mode.post_dirt_sheet_tweets(company,2)
+  except Exception: pass
  save_week_state(); save_universe()
 
 def save_tweet(tweet_data):
@@ -2578,14 +3213,23 @@ def _render_join_private_game_form():
  with bfg_card('Join Private Game'):
   st.info('You need **two codes** from the host: **Invite code** (e.g. `BFG-6051`) and your **brand access code** (8 letters, e.g. `B7SUO2R8` for NXT). Do not put the invite code in both fields.')
   invite=st.text_input('Invite code',key='mp_join_invite',placeholder='BFG-6051')
+  if invite.strip():
+   hit=mp.lookup_invite_session(invite.strip())
+   if hit:
+    pics=hit.get('picture_stats') or {}
+    st.success(f"Found **{hit.get('game_name','')}** · Week {hit.get('week',0)} · pictures NXT {pics.get('NXT',0)} WCW {pics.get('WCW',0)}")
+    st.code(f"Admin `{hit.get('admin_code','')}` · NXT `{hit.get('nxt_code','')}` · SmackDown `{hit.get('smackdown_code','')}` · WCW `{hit.get('wcw_code','')}`",language=None)
+   else:
+    st.warning('Invite not found on this server — try Streamlit Cloud if you played there.')
   pname=st.text_input('Player name',key='mp_join_name',placeholder='Your GM name')
   access=st.text_input('Brand access code',key='mp_join_access',placeholder='NXT / SmackDown / WCW / Admin code (8 characters)')
-  st.caption('Example — game **easywork**: invite `BFG-6051` · NXT `B7SUO2R8` · SmackDown `LPYRCDMN` · WCW `VAUK5RO7` · Admin `R0143DPK`')
+  st.caption('**easywork (original)** `BFG-6051` · NXT `B7SUO2R8` · SmackDown `LPYRCDMN` · WCW `VAUK5RO7` · Admin `R0143DPK`')
+  st.caption('**easywork (copy)** `BFG-9309` · Admin **`3K5FC2PY`** · NXT `XSGIM78E` · SmackDown `P3K8LC63` · WCW `20U94Q5P`')
   if st.button('Join private game',type='primary',use_container_width=True,key='mp_join_btn'):
    if not invite.strip() or not pname.strip() or not access.strip():
     st.error('Enter invite code, player name, and brand access code.')
    else:
-    info,err=mp.join_private_session(invite,pname,access)
+    info,err=mp.join_private_session(invite.strip(),pname.strip(),access.strip().upper().replace(' ',''))
     if err:
      if 'Invite code not found' in err:
       st.error(err)
@@ -2596,13 +3240,22 @@ def _render_join_private_game_form():
      else:
       st.error(err)
     else:
-     try:
-      apply_player_session(info['player_name'],info['role'],info['assigned_company'],session_id=info['session_id'],game_name=info['game_name'],invite_code=info['invite_code'])
-      st.session_state.pop('gate_login_tab',None)
-      st.toast(f"Joined {info.get('game_name','game')} as {info['role']}")
-      st.rerun()
-     except Exception as ex:
-      st.error(str(ex))
+     apply_player_session(info['player_name'],info['role'],info['assigned_company'],session_id=info['session_id'],game_name=info['game_name'],invite_code=info['invite_code'])
+     st.session_state.pop('gate_login_tab',None)
+     st.session_state.gate_screen=''
+     st.toast(f"Joined {info.get('game_name','game')} as {info['role']}")
+     st.rerun()
+
+def _enter_cloned_session(meta):
+ """After clone/create — log in as admin with fresh codes."""
+ apply_player_session(meta.get('created_by','Admin'),'Admin','All',session_id=meta['session_id'],game_name=meta.get('game_name',''),invite_code=meta.get('invite_code',''))
+ try:
+  save_universe()
+ except Exception:
+  pass
+ st.session_state.pop('mp_created_codes',None)
+ st.session_state.gate_screen=''
+ st.rerun()
 
 def render_login_screen():
  mp.init_storage()
@@ -2621,10 +3274,7 @@ def render_login_screen():
    st.write(f"**WCW GM:** `{codes.get('wcw_code')}`")
    st.caption('Friends join with the **invite code** + their **role code**. Random players without these codes cannot enter your universe.')
    if st.button('Enter your universe as Admin',type='primary',key='mp_enter_created'):
-    apply_player_session(codes.get('created_by','Admin'),'Admin','All',session_id=codes['session_id'],game_name=codes.get('game_name',''),invite_code=codes.get('invite_code',''))
-    save_universe()
-    st.session_state.pop('mp_created_codes',None)
-    st.rerun()
+    _enter_cloned_session(codes)
   return
  c1,c2,c3=st.columns([1,1.35,1])
  with c2:
@@ -2655,6 +3305,15 @@ def render_login_screen():
        st.rerun()
    with tab_join:
     _render_join_private_game_form()
+  st.markdown('---')
+  lq1,lq2=st.columns(2)
+  with lq1:
+   if st.button('▶ ENTER BFG-9309 (Admin)',type='primary',use_container_width=True,key='login_quick_9309'):
+    request_quick_login('BFG-9309','Joshua')
+  with lq2:
+   if st.button('▶ BFG-9309 + 3K5FC2PY',use_container_width=True,key='login_join_9309_code'):
+    request_join_with_codes('BFG-9309','3K5FC2PY','Joshua')
+  st.caption('**BFG-9309** · Admin code **3K5FC2PY** (restored) · or one-click Admin with no codes.')
   with st.expander('Solo test mode (no invite codes)'):
    name=st.text_input('Player Name','',key='mp_login_name',placeholder='Solo GM')
    role_pick=st.selectbox('Role',list(GM_ROLE_OPTIONS.keys()),key='mp_login_role')
@@ -2664,7 +3323,29 @@ def render_login_screen():
     else:
      role,company=GM_ROLE_OPTIONS[role_pick]
      apply_player_session(name.strip(),role,company,session_id='local',game_name='Solo Test')
+     st.session_state.gate_screen=''
      st.rerun()
+  with st.expander('Copy old save → new session (keeps roster & pictures)'):
+   st.caption('Use this if login codes stopped working but your old universe is still on this computer.')
+   saved=mp.list_saved_sessions()
+   if not saved:
+    st.info('No saved universes found to copy.')
+   else:
+    opts={f"{s.get('game_name','Universe')} · Week {s.get('week',0)} · {s.get('session_id','')[:8]}":s['session_id'] for s in saved}
+    clone_src=st.selectbox('Copy from',list(opts.keys()),key='login_clone_src')
+    clone_name=st.text_input('New game name',key='login_clone_gname',placeholder='Joshua Universe v2')
+    clone_admin=st.text_input('Your name (Admin)',key='login_clone_admin',placeholder='Joshua')
+    if st.button('Create new session from this save',type='primary',key='login_clone_btn'):
+     if not clone_name.strip() or not clone_admin.strip():
+      st.error('Enter a new game name and your admin name.')
+     else:
+      try:
+       meta=mp.clone_private_session(opts[clone_src],clone_name.strip(),clone_admin.strip())
+       st.session_state.mp_created_codes=meta
+       st.success('Copied your roster, pictures, and progress into a **new session**. Save the new codes on the next screen.')
+       st.rerun()
+      except Exception as ex:
+       st.error(f'Could not clone session: {ex}')
 
 def render_multiplayer_sidebar():
  st.sidebar.markdown('---')
@@ -2691,9 +3372,11 @@ def render_multiplayer_sidebar():
   st.sidebar.markdown('<span class="overall-badge">View Only 🔒</span>',unsafe_allow_html=True)
  render_storage_status_banner('sidebar')
  if st.sidebar.button('Logout',key='mp_logout'):
-  for k in ['logged_in','player_name','role','assigned_company','mp_show_local_warning','_universe_loaded','session_id','game_name','invite_code','mp_created_codes']:
+  for k in ['logged_in','player_name','role','assigned_company','mp_show_local_warning','_universe_loaded','session_id','game_name','invite_code','mp_created_codes','_admin_save_mode']:
    st.session_state[k]=False if k=='logged_in' else ''
   st.session_state.assigned_company=''
+  st.session_state._manual_logout=True
+  st.session_state.gate_screen='intro'
   st.rerun()
 
 def company_week_status_badge(company):
@@ -2705,10 +3388,10 @@ def render_weekly_control_center():
  ui_pages.render_multiplayer_dashboard()
 
 NAV_SECTIONS={
- 'MAIN':['Dashboard','Multiplayer Dashboard','Company Home','Book Show','Schedule Calendar','Weekly Performance'],
- 'ROSTER / STORY':['Roster','Champions','Rivalries','Storyline Tracker','Character Editor','Power Rankings','Free Agency'],
+ 'MAIN':['Dashboard','Multiplayer Dashboard','Company Home','Book Show','Schedule Calendar','Weekly Performance','GM Hub'],
+ 'ROSTER / STORY':['Roster','Tag Teams','Factions','Champions','Rivalries','Storyline Tracker','Character Editor','Power Rankings','Free Agency'],
  'MEDIA / BUSINESS':['Twitter','NXT Unfiltered','NXT Spotlight Studio','SmackDown Culture Pulse','WCW Sports Desk','Appearances','Attractions','Sponsor Objectives','Trade Center','Finance','Contracts'],
- 'TOOLS':['Random Event History','Picture Manager','Save Center','Commissioner Control Center','Season Awards'],
+ 'TOOLS':['Story Grader','Random Event History','Picture Manager','Save Center','Commissioner Control Center','Season Awards'],
 }
 NAV_PAGES=[p for sec in NAV_SECTIONS.values() for p in sec]
 
@@ -2762,7 +3445,7 @@ def venue_selector(k):
  names=[v['venue'] for v in vs]+['Custom Venue']
  vn=st.selectbox('Arena/Stadium', names, key=k+'venue')
  if vn=='Custom Venue':
-  return {'country':country,'region':reg,'city':city,'venue':st.text_input('Custom venue name','Custom Venue', key=k+'cv'),'capacity':st.number_input('Capacity',1000,150000,15000,key=k+'cap'),'type':st.selectbox('Type',['Arena','Stadium'],key=k+'type'),'rental_cost':st.number_input('Rental',0,10000000,400000,key=k+'rent'),'security_cost':st.number_input('Security',0,5000000,125000,key=k+'sec'),'travel_cost':st.number_input('Travel / Logistics',0,5000000,100000,key=k+'trv'),'travel_multiplier':st.number_input('Travel Multiplier',.5,3.0,1.1,key=k+'tm'),'ticket_multiplier':st.number_input('Ticket Multiplier',.5,3.0,1.0,key=k+'tick'),'market_bonus':st.number_input('Market Bonus',0,5000000,150000,key=k+'mb'),'prestige':st.slider('Prestige',1,10,5,key=k+'prest')}
+  return {'country':country,'region':reg,'city':city,'venue':st.text_input('Custom venue name','Custom Venue', key=k+'cv'),'capacity':st.number_input('Capacity',1000,150000,15000,key=k+'cap'),'type':st.selectbox('Venue Type',['Arena','Stadium','Performance Center'],key=k+'type'),'rental_cost':st.number_input('Rental',0,10000000,400000,key=k+'rent'),'security_cost':st.number_input('Security',0,5000000,125000,key=k+'sec'),'travel_cost':st.number_input('Travel / Logistics',0,5000000,100000,key=k+'trv'),'travel_multiplier':st.number_input('Travel Multiplier',.5,3.0,1.1,help='See Entry Guide tab for recommended values by region.',key=k+'tm'),'ticket_multiplier':st.number_input('Ticket Multiplier',.5,3.0,1.0,help='See Entry Guide tab for PLE vs weekly recommendations.',key=k+'tick'),'market_bonus':st.number_input('Market Bonus',0,5000000,150000,key=k+'mb'),'prestige':st.slider('Prestige',1,10,5,key=k+'prest')}
  v=next(x for x in vs if x['venue']==vn); v=dict(v); v.setdefault('travel_cost',int(250000*v.get('travel_multiplier',1.1))); return v
 def apply_record(w,result,tag=False,title=False):
  if result=='W':
@@ -3451,7 +4134,8 @@ def simulate_mega_twitter_wave(comp,count=25):
   posts.append(make_twitter_post(comp,'wrestler',name,'@'+slug(name).replace('_',''),'Wrestler',typ,text,mention,build_tweet_extra(name,comp,ww,eff,topic,tone,'original',ai_generated=twitter_ai_enabled())))
  return posts
 
-GRADE_WEIGHTS={'story_continuity':.25,'emotion_fan':.20,'character_accuracy':.15,'rivalry_heat':.15,'champion_usage':.10,'match_promo_quality':.10,'business_venue':.05}
+# Fair Brand Engine weights: story + continuity decide show quality; money/venue barely matters.
+GRADE_WEIGHTS={'story_continuity':.30,'emotion_fan':.20,'match_promo_quality':.20,'character_accuracy':.10,'champion_usage':.10,'rivalry_heat':.05,'business_venue':.05}
 GRADE_WEIGHT_LABELS={'story_continuity':'Story Continuity','emotion_fan':'Emotion / Fan Investment','character_accuracy':'Character Accuracy','rivalry_heat':'Rivalry Heat','champion_usage':'Champion Usage','match_promo_quality':'Promo / Match Quality','business_venue':'Business / Venue Fit'}
 PERFORMANCE_GRADE_LABELS={'story_continuity':'Story Continuity Grade','emotion_fan':'Emotion / Fan Investment Grade','character_accuracy':'Character Accuracy Grade','rivalry_heat':'Rivalry Heat Grade','champion_usage':'Champion Usage Grade','match_promo_quality':'Promo / Match Quality Grade','business_venue':'Business / Venue Fit Grade'}
 
@@ -3733,7 +4417,8 @@ def book_show_helpers():
   mark_company_draft_saved=mark_company_draft_saved,
  )
 
-COMPANY_VIEWERSHIP_BASELINE={'NXT':1800000,'SmackDown':1600000,'WCW':1700000}
+# Fair Brand Engine: every brand starts from the same audience — growth comes from booking, not bias.
+COMPANY_VIEWERSHIP_BASELINE={c:(fair_brands.EQUAL_STARTING_VALUES['starting_viewership'] if fair_brands else 2000000) for c in ('NXT','SmackDown','WCW')}
 VIEWERSHIP_MIN=500000
 VIEWERSHIP_MAX=5000000
 RATING_VIEWERSHIP_PCT={10:0.18,9:0.14,8:0.10,7:0.06,6:0.03,5:0.0,4:-0.03,3:-0.06,2:-0.10,1:-0.14}
@@ -3896,7 +4581,7 @@ def render_grade_report(g):
  st.caption(f"Letter grade: **{g.get('grade','—')}**")
  if g.get('breakdown'):
   with st.expander('Rating Breakdown',expanded=True):
-   st.caption('Weights: Story Continuity 25% · Emotion 20% · Character 15% · Rivalry 15% · Champion 10% · Promo/Match 10% · Business/Venue 5% (PLEs graded harder)')
+   st.caption('Weights: Story Continuity 30% · Emotion 20% · Promo/Match 20% · Character 10% · Champion 10% · Rivalry 5% · Business/Venue 5% (PLEs graded harder)')
    cols=st.columns(3)
    for i,(k,v) in enumerate(g['breakdown'].items()):
     cols[i%3].metric(k,f"{v}/10")
@@ -4091,6 +4776,28 @@ TWEET_TYPES=['Normal Tweet','Positive Tweet','Angry Tweet','Rivalry Tweet','Cham
 
 REMOVED_WRESTLERS=frozenset({'Max Caster','Jon Moxley','Claudio Castagnoli'})
 REMOVED_TAG_TEAMS=frozenset({'A Town Under','Combat Club'})
+
+def get_baseline_roster():
+ """Default shipped roster + EXTRA_WRESTLERS — never includes session custom members."""
+ base=[dict(w) for w in ROSTER if w['name'] not in REMOVED_WRESTLERS|REMOVED_TAG_TEAMS]
+ existing={w['name'] for w in base}
+ for n,c,d,o,a,s in EXTRA_WRESTLERS:
+  if n not in existing:
+   base.append(W(n,c,d,o,a,s)); existing.add(n)
+ for w in base:
+  if w['company']=='SmackDown' and w['name'] in SD_DIVISIONS: w['division']=SD_DIVISIONS[w['name']]
+  if w['company']=='WCW' and w['name'] in WCW_DIVISIONS: w['division']=WCW_DIVISIONS[w['name']]
+ return base
+
+def apply_merged_roster(saved_roster=None):
+ """Merge default + saved/custom roster — custom members never dropped on rerun."""
+ saved=saved_roster if saved_roster is not None else st.session_state.get('roster',[])
+ sidecar=roster_store.read_custom_roster_sidecar(session_custom_roster_file())
+ combined=roster_store.combine_saved_rosters(saved,sidecar)
+ st.session_state.roster=roster_store.merge_rosters(get_baseline_roster(),combined)
+ pic_sync.apply_registry_to_roster(st.session_state.roster)
+ roster_store.ensure_custom_roster_index(st.session_state)
+ ensure_wrestler_ids()
 
 def purge_removed_talent():
  """Drop real-world talent the user removed — also cleans existing saves."""
@@ -4705,7 +5412,13 @@ def calc_merchandise_revenue(company,booked_names,rating,ple):
  return total,notes
 
 def calc_media_revenue(company,rating,ple):
- mult={'NXT':1.15,'SmackDown':1.05,'WCW':1.1}.get(company,1)
+ # Fair Brand Engine: balanced sponsor media perks — NXT's premium media bonus only kicks in on strong story shows.
+ if fair_brands:
+  perk=fair_brands.BALANCED_SPONSOR_PERKS.get(company,{})
+  mult=perk.get('media_bonus_multiplier',1.05)
+  if company=='NXT' and float(rating or 0)<7.5: mult=1.05
+ else:
+  mult=1.05
  base=200000*mult
  if ple: base*=1.6
  return int(base*(1+rating*.05))
@@ -5345,7 +6058,7 @@ def _render_dirt_sheet_grade_card(hist):
  m4.metric('Vs last week',f'{ch:+,}' if ch else '—')
  if br:
   with bfg_card('Category grades (Dirt Sheet rubric)'):
-   st.caption('Weights: Story 25% · Emotion 20% · Character 15% · Rivalry 15% · Champion 10% · Promo/Match 10% · Business/Venue 5%')
+   st.caption('Weights: Story 30% · Emotion 20% · Promo/Match 20% · Character 10% · Champion 10% · Rivalry 5% · Business/Venue 5%')
    cols=st.columns(4)
    for i,(label,score) in enumerate(br.items()):
     cols[i%4].metric(label,f'{float(score):.1f}/10',_grade_letter(float(score)))
@@ -5523,6 +6236,7 @@ def render_weekly_performance_page():
  else:
   render_money_meter(brand,compact=False,show_ticker=True,show_sponsor=True)
   render_brand_hub_embed(brand,compact=True,key_prefix='wp_hub')
+  if gm_mode: gm_mode.render_weekly_pulse(brand)
  weeks=sorted({int(h.get('week',0)) for h in st.session_state.get('weekly_history',[])},reverse=True)
  week_opts=['All']+([str(w) for w in weeks] if weeks else [])
  with st.expander('Filters',expanded=False):
@@ -5695,7 +6409,7 @@ def render_financial_crisis_panel(comp,show_tools=True,key_prefix='crisis'):
   if rival_bid and vuln:
    st.markdown(f'**Submit rival bid** ({ac} → {comp} in crisis)')
    names=[v['wrestler']['name'] for v in vuln]
-   tgt=st.selectbox('Target wrestler',names,key=f'{key_prefix}_bid_tgt_{comp}')
+   tgt=clean_name_selector('Target wrestler',f'{key_prefix}_bid_tgt_{comp}',options=names,company=comp,entity_type='Wrestler',default_company=comp,show_search=True,label_search='Search target wrestler')
    w=find(tgt)
    if w:
     bw=crisis.get_open_bidding_for_wrestler(tgt,comp) or crisis.create_bidding_war(w,comp)
@@ -5716,7 +6430,7 @@ def render_financial_crisis_panel(comp,show_tools=True,key_prefix='crisis'):
     pool=payroll_wrestlers(comp)
     if not pool: st.caption('No payroll wrestlers.')
     else:
-     tw_sel=st.selectbox('Wrestler',sorted([w['name'] for w in pool]),key=f'{key_prefix}_tool_w')
+     tw_sel=clean_name_selector('Wrestler',f'{key_prefix}_tool_w',options=[w['name'] for w in pool],company=comp,entity_type='Wrestler',default_company=comp,show_search=True,label_search='Search wrestler')
      w=find(tw_sel)
      t1,t2,t3,t4=st.columns(4)
      if t1.button('Ask pay cut',key=f'{key_prefix}_pcut'):
@@ -5834,6 +6548,580 @@ def render_finance_company_panel(comp):
 CALENDAR_SHOW_TYPES=['Weekly Show','Go-Home Show','Fallout Show','TV Special','PLE','Stadium Show','International Tour','Tournament','Crossover Event','Sponsor Activation','Media Appearance','Travel Week','Off Week','Homecoming Show']
 CALENDAR_STATUSES=['Planned','Draft','Locked','Completed','Needs Info','Sponsor Pending']
 CALENDAR_MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December']
+CALENDAR_QUICK_TYPES=['Weekly Show','Go-Home Show','PLE','TV Special','International Tour','Off Week']
+CALENDAR_EVENT_PRESETS=[
+ {'id':'royal_rumble','label':'Royal Rumble-style','show_type':'PLE','names':{'NXT':'NXT Royal Rumble','SmackDown':'Royal Rumble','WCW':'WCW Battle Bowl'},'capacity':65000,'rental_cost':2500000,'security_cost':750000,'travel_cost':150000,'travel_multiplier':1.35,'ticket_multiplier':1.85,'ticket_price':95,'venue_type':'Stadium'},
+ {'id':'wrestlemania','label':'WrestleMania-style','show_type':'Stadium Show','names':{'NXT':'NXT Stand & Deliver','SmackDown':'WrestleMania','WCW':'Starrcade'},'capacity':80000,'rental_cost':3500000,'security_cost':950000,'travel_cost':200000,'travel_multiplier':1.5,'ticket_multiplier':2.0,'ticket_price':125,'venue_type':'Stadium'},
+ {'id':'summerslam','label':'SummerSlam-style','show_type':'PLE','names':{'NXT':'NXT HeatWave','SmackDown':'SummerSlam','WCW':'Bash at the Beach'},'capacity':55000,'rental_cost':1800000,'security_cost':520000,'travel_cost':130000,'travel_multiplier':1.25,'ticket_multiplier':1.65,'ticket_price':85,'venue_type':'Stadium'},
+ {'id':'survivor_series','label':'Survivor Series-style','show_type':'PLE','names':{'NXT':'NXT WarGames','SmackDown':'Survivor Series','WCW':'Fall Brawl'},'capacity':45000,'rental_cost':1200000,'security_cost':380000,'travel_cost':120000,'travel_multiplier':1.2,'ticket_multiplier':1.55,'ticket_price':80,'venue_type':'Arena'},
+ {'id':'brand_ple','label':'Brand PLE','show_type':'PLE','names':{'NXT':'NXT TakeOver','SmackDown':'SmackDown Premium Live','WCW':'WCW SuperBrawl'},'capacity':20000,'rental_cost':850000,'security_cost':240000,'travel_cost':100000,'travel_multiplier':1.15,'ticket_multiplier':1.5,'ticket_price':75,'venue_type':'Arena'},
+ {'id':'intl_special','label':'International special','show_type':'International Tour','names':{'NXT':'NXT Global','SmackDown':'SmackDown World Tour','WCW':'WCW Worldwide'},'capacity':18000,'rental_cost':600000,'security_cost':180000,'travel_cost':250000,'travel_multiplier':2.5,'ticket_multiplier':1.25,'ticket_price':70,'venue_type':'Arena'},
+ {'id':'tournament_final','label':'Tournament finals','show_type':'Tournament','names':{'NXT':'NXT Breakout Finals','SmackDown':'King of the Ring Finals','WCW':'WCW World Cup Finals'},'capacity':15000,'rental_cost':500000,'security_cost':150000,'travel_cost':100000,'travel_multiplier':1.1,'ticket_multiplier':1.35,'ticket_price':65,'venue_type':'Arena'},
+ {'id':'draft','label':'Draft episode','show_type':'TV Special','names':{'NXT':'NXT Draft Night','SmackDown':'SmackDown Draft','WCW':'WCW Draft Special'},'capacity':12000,'rental_cost':350000,'security_cost':110000,'travel_cost':80000,'travel_multiplier':1.0,'ticket_multiplier':1.15,'ticket_price':55,'venue_type':'Arena'},
+ {'id':'awards','label':'Awards show','show_type':'TV Special','names':{'NXT':'NXT Slammys','SmackDown':'Slammy Awards','WCW':'WCW Honors Night'},'capacity':10000,'rental_cost':300000,'security_cost':95000,'travel_cost':75000,'travel_multiplier':1.0,'ticket_multiplier':1.2,'ticket_price':60,'venue_type':'Arena'},
+ {'id':'olympics_nxt','label':'Olympics crossover (NXT)','show_type':'Crossover Event','names':{'NXT':'NXT Olympics Crossover','SmackDown':'Olympic Showcase','WCW':'Olympic Showcase'},'capacity':22000,'rental_cost':700000,'security_cost':200000,'travel_cost':120000,'travel_multiplier':1.2,'ticket_multiplier':1.45,'ticket_price':70,'venue_type':'Arena','nxt_only':True},
+ {'id':'sponsor','label':'Sponsor activation','show_type':'Sponsor Activation','names':{'NXT':'NXT Sponsor Night','SmackDown':'Sponsor Showcase','WCW':'WCW Partner Live'},'capacity':8000,'rental_cost':200000,'security_cost':70000,'travel_cost':50000,'travel_multiplier':1.0,'ticket_multiplier':1.1,'ticket_price':45,'venue_type':'Performance Center'},
+ {'id':'media','label':'Media appearance week','show_type':'Media Appearance','names':{'NXT':'NXT Media Week','SmackDown':'SmackDown Media Tour','WCW':'WCW Press Circuit'},'capacity':5000,'rental_cost':120000,'security_cost':45000,'travel_cost':60000,'travel_multiplier':1.05,'ticket_multiplier':1.0,'ticket_price':0,'venue_type':'Performance Center'},
+]
+MONTH_WEEK_RANGES=[
+ ('January',[1,2,3,4,5]),('February',[6,7,8,9]),('March',[10,11,12,13]),
+ ('April',[14,15,16,17,18]),('May',[19,20,21,22]),('June',[23,24,25,26]),
+ ('July',[27,28,29,30,31]),('August',[32,33,34,35]),('September',[36,37,38,39]),
+ ('October',[40,41,42,43,44]),('November',[45,46,47,48]),('December',[49,50,51,52]),
+]
+
+def calendar_display_year():
+ return 2026+max(0,int(st.session_state.get('year',1))-1)
+
+def format_date_us(d):
+ """Format as MM/DD/YYYY (e.g. 01/10/2026)."""
+ if d is None: return ''
+ if isinstance(d,str):
+  s=d.strip()[:10]
+  if not s: return ''
+  try:
+   if '/' in s: return s
+   parts=s.split('-')
+   if len(parts)>=3:
+    return f'{int(parts[1]):02d}/{int(parts[2]):02d}/{int(parts[0])}'
+  except (ValueError, IndexError): return s
+  return s
+ try:
+  return f'{d.month:02d}/{d.day:02d}/{d.year}'
+ except Exception:
+  return str(d)
+
+def parse_date_us(s,year_fallback=None):
+ """Parse MM/DD/YYYY or YYYY-MM-DD into date."""
+ raw=(s or '').strip()
+ if not raw: return None
+ yr=year_fallback or calendar_display_year()
+ try:
+  if '/' in raw:
+   parts=[p.strip() for p in raw.split('/')]
+   if len(parts)==3:
+    a,b,c=int(parts[0]),int(parts[1]),int(parts[2])
+    if a>12: return date(a,b,c)
+    if c<100: c+=2000
+    return date(c,a,b)
+  if '-' in raw:
+   return date.fromisoformat(raw[:10])
+ except (ValueError, TypeError):
+  return None
+ return None
+
+def default_date_for_week(week,year=None):
+ yr=year or calendar_display_year()
+ w=int(week)
+ for mi,(month,weeks) in enumerate(MONTH_WEEK_RANGES):
+  if w in weeks:
+   idx=weeks.index(w)
+   month_num=mi+1
+   day=min(28,max(1,1+idx*7))
+   try: return date(yr,month_num,day)
+   except ValueError: return date(yr,month_num,28)
+ return date(yr,1,1)+timedelta(days=(w-1)*7)
+
+def month_for_week(week):
+ w=int(week)
+ for month,weeks in MONTH_WEEK_RANGES:
+  if w in weeks: return month
+ return CALENDAR_MONTHS[0]
+
+def parse_calendar_location(loc_str):
+ s=(loc_str or '').strip()
+ if not s:
+  return {'city':'TBD','region':'','country':'United States','venue':'TBD'}
+ venue=s
+ city_part=s
+ if ' — ' in s: city_part,venue=[x.strip() for x in s.split(' — ',1)]
+ elif ' - ' in s and s.count('-')==1: city_part,venue=[x.strip() for x in s.split('-',1)]
+ if ',' in city_part:
+  parts=[p.strip() for p in city_part.split(',')]
+  city=parts[0]
+  region=parts[1] if len(parts)>1 else ''
+  country=parts[2] if len(parts)>2 else ('United States' if region and len(region)<=3 else 'United States')
+  if len(region)==2 and region.isalpha(): country='United States'
+ elif city_part:
+  city=city_part; region=''; country='United States'
+ else:
+  city='TBD'; region=''; country='United States'
+ venue=(venue or city or 'TBD').strip()
+ vmatch=next((dict(x) for x in VENUES if x.get('city','').lower()==city.lower() and (not venue or venue.lower() in x.get('venue','').lower())),None)
+ if vmatch: return {'city':vmatch['city'],'region':vmatch.get('region',region),'country':vmatch.get('country',country),'venue':vmatch.get('venue',venue),'venue_data':vmatch}
+ return {'city':city or 'TBD','region':region,'country':country,'venue':venue,'venue_data':{'country':country,'region':region,'city':city,'venue':venue,'capacity':15000,'rental_cost':400000,'security_cost':125000,'travel_multiplier':1.1,'ticket_multiplier':1.0,'market_bonus':150000,'prestige':5}}
+
+def format_calendar_location_input(e):
+ loc=format_schedule_location(e)
+ venue=(e.get('venue') or '').strip()
+ if venue and venue not in ('TBD','—') and venue not in loc:
+  return f'{loc} — {venue}' if loc and loc!='TBD' else venue
+ return loc if loc and loc!='TBD' else (venue if venue and venue!='TBD' else '')
+
+def calendar_week_defaults(comp,week):
+ ex=get_scheduled_show(comp,week)
+ if ex:
+  return {
+   'event':ex.get('show_name',f'{comp} Week {week}'),
+   'date':format_date_us(ex.get('date')),
+   'location':format_calendar_location_input(ex),
+   'ticket':int(ex.get('ticket_price',65)),
+   'stype':ex.get('show_type','Weekly Show'),
+  }
+ d=default_date_for_week(week)
+ return {'event':f'{comp} Week {week}','date':format_date_us(d),'location':'','ticket':65,'stype':'Weekly Show'}
+
+def delete_calendar_week_entry(comp,week):
+ wk=int(week)
+ st.session_state.schedule_calendar=[e for e in st.session_state.schedule_calendar if not (int(e.get('week',-1))==wk and e.get('company')==comp)]
+
+def save_calendar_week_entry(comp,week,event_name,date_str,location,ticket_px,show_type,status='Planned',preserve_existing=True):
+ prev=get_scheduled_show(comp,week) if preserve_existing else None
+ loc=parse_calendar_location(location)
+ parsed=parse_date_us(date_str) or default_date_for_week(week)
+ venue=loc.get('venue_data') or {}
+ cap=int(venue.get('capacity',15000))
+ if prev:
+  cap=int(prev.get('capacity') or cap)
+  vdata=prev.get('venue_data') or venue
+  venue={**vdata,**venue,'capacity':cap}
+ entry={
+  'month':month_for_week(week),'week':int(week),'date':parsed.isoformat(),'date_display':format_date_us(parsed),
+  'company':comp,'show_name':(event_name or f'{comp} Week {week}').strip(),
+  'show_type':show_type or 'Weekly Show',
+  'country':loc.get('country','United States'),'region':loc.get('region',''),
+  'city':loc.get('city','TBD'),'venue':loc.get('venue','TBD'),
+  'venue_data':{**venue,'capacity':cap,'country':loc.get('country','United States'),'region':loc.get('region',''),'city':loc.get('city','TBD'),'venue':loc.get('venue','TBD')},
+  'capacity':cap,'ticket_price':int(ticket_px or 65),'status':status or (prev.get('status') if prev else 'Planned'),
+  'travel_required':bool(prev.get('travel_required')) if prev and prev.get('travel_required') is not None else loc.get('country','United States')!='United States',
+  'hotel_required':bool(prev.get('hotel_required',True)) if prev else True,
+  'transportation_required':bool(prev.get('transportation_required',True)) if prev else True,
+  'hometown':list(prev.get('hometown') or []) if prev else [],
+  'planned_rivalry':prev.get('planned_rivalry','') if prev else '',
+  'notes':prev.get('notes','') if prev else '',
+ }
+ entry=normalize_schedule_entry(entry)
+ st.session_state.schedule_calendar=[e for e in st.session_state.schedule_calendar if int(e.get('week',-1))!=int(week) or e.get('company')!=comp]
+ st.session_state.schedule_calendar.append(entry)
+ st.session_state.schedule_calendar.sort(key=lambda x:(int(x.get('week',0)),x.get('company','')))
+
+def save_calendar_month_batch(comp,month,rows):
+ """Save all weeks in a month from planner form rows. rows: list of dicts with week,event,date,location,ticket,stype."""
+ saved=0
+ for row in rows:
+  week=int(row['week'])
+  event=(row.get('event') or '').strip()
+  loc=(row.get('location') or '').strip()
+  ex=get_scheduled_show(comp,week)
+  if not event and not loc:
+   if ex: delete_calendar_week_entry(comp,week); saved+=1
+   continue
+  save_calendar_week_entry(comp,week,event,row.get('date',''),loc,row.get('ticket',65),row.get('stype','Weekly Show'),ex.get('status','Planned') if ex else 'Planned')
+  saved+=1
+ return saved
+
+def calendar_month_fill_count(comp,weeks):
+ return sum(1 for w in weeks if get_scheduled_show(comp,w))
+
+def default_calendar_expand_month(comp):
+ """Month expander to open first: next empty week, else current game month."""
+ nw=next_bookable_week()
+ if nw<=52:
+  return month_for_week(nw)
+ filled_months={month for month,weeks in MONTH_WEEK_RANGES if calendar_month_fill_count(comp,weeks)==len(weeks)}
+ for month,weeks in MONTH_WEEK_RANGES:
+  if month not in filled_months: return month
+ return month_for_week(nw)
+
+def month_week_slots(month):
+ """Return (local_week_label 1-4+, global_week) for calendar grid."""
+ weeks=next(w for m,w in MONTH_WEEK_RANGES if m==month)
+ return [(i+1, weeks[i]) for i in range(min(4, len(weeks)))] + ([(5, weeks[4])] if len(weeks)>4 else [])
+
+def ensure_calendar_selection(comp):
+ if st.session_state.get('cal_pick_comp')!=comp:
+  st.session_state.cal_pick_comp=comp
+ if not st.session_state.get('cal_pick_week'):
+  st.session_state.cal_pick_week=min(52,max(1,next_bookable_week()))
+
+def week_editor_defaults(comp,week):
+ ex=get_scheduled_show(comp,week)
+ v=ex.get('venue_data',{}) if ex else {}
+ if not v and ex:
+  v=next((dict(x) for x in VENUES if x.get('venue')==ex.get('venue') and x.get('city')==ex.get('city')),{})
+ d=default_date_for_week(week)
+ return {
+  'show_name':ex.get('show_name',f'{comp} Week {week}') if ex else f'{comp} Week {week}',
+  'company':ex.get('company',comp) if ex else comp,
+  'show_type':ex.get('show_type','Weekly Show') if ex else 'Weekly Show',
+  'date':format_date_us(ex.get('date')) if ex else format_date_us(d),
+  'status':ex.get('status','Planned') if ex else 'Planned',
+  'country':ex.get('country',v.get('country','United States')) if ex else 'United States',
+  'region':ex.get('region',v.get('region','California')) if ex else 'California',
+  'city':ex.get('city',v.get('city','Los Angeles')) if ex else 'Los Angeles',
+  'venue':ex.get('venue',v.get('venue','Custom Venue')) if ex else 'Custom Venue',
+  'capacity':int(ex.get('capacity',v.get('capacity',15000))) if ex else 15000,
+  'venue_type':v.get('type','Arena'),
+  'rental_cost':int(v.get('rental_cost',400000)),
+  'security_cost':int(v.get('security_cost',125000)),
+  'travel_cost':int(v.get('travel_cost',100000)),
+  'travel_multiplier':float(v.get('travel_multiplier',1.1)),
+  'ticket_multiplier':float(v.get('ticket_multiplier',1.0)),
+  'ticket_price':int(ex.get('ticket_price',65)) if ex else 65,
+  'travel_required':bool(ex.get('travel_required',False)) if ex else False,
+  'hotel_required':bool(ex.get('hotel_required',True)) if ex else True,
+  'transportation_required':bool(ex.get('transportation_required',True)) if ex else True,
+  'planned_rivalry':ex.get('planned_rivalry','') if ex else '',
+  'notes':ex.get('notes','') if ex else '',
+  'hometown':list(ex.get('hometown') or []) if ex else [],
+ }
+
+def calendar_autosave(comp):
+ def _do():
+  touch_universe_meta(comp)
+  save_universe()
+ autosave.autosave_universe(_do,comp)
+
+def save_calendar_full_entry(comp,week,payload):
+ """Save week with full venue/cost/multiplier fields."""
+ wk=int(week)
+ brand=(payload.get('company') or comp).strip() or comp
+ prev=get_scheduled_show(comp,wk)
+ venue_data={
+  'country':payload.get('country','United States'),'region':payload.get('region',''),
+  'city':payload.get('city','TBD'),'venue':payload.get('venue','TBD'),
+  'capacity':int(payload.get('capacity',15000)),'type':payload.get('venue_type','Arena'),
+  'rental_cost':int(payload.get('rental_cost',400000)),'security_cost':int(payload.get('security_cost',125000)),
+  'travel_cost':int(payload.get('travel_cost',100000)),
+  'travel_multiplier':float(payload.get('travel_multiplier',1.1)),
+  'ticket_multiplier':float(payload.get('ticket_multiplier',1.0)),
+  'market_bonus':int((prev or {}).get('venue_data',{}).get('market_bonus',150000)),
+  'prestige':int((prev or {}).get('venue_data',{}).get('prestige',5)),
+ }
+ parsed=parse_date_us(payload.get('date','')) or default_date_for_week(wk)
+ entry={
+  'month':month_for_week(wk),'week':wk,'date':parsed.isoformat(),'date_display':format_date_us(parsed),
+  'company':brand,'show_name':(payload.get('show_name') or f'{brand} Week {wk}').strip(),
+  'show_type':payload.get('show_type','Weekly Show'),
+  'country':venue_data['country'],'region':venue_data['region'],'city':venue_data['city'],'venue':venue_data['venue'],
+  'venue_data':venue_data,'capacity':venue_data['capacity'],'ticket_price':int(payload.get('ticket_price',65)),
+  'status':payload.get('status','Planned'),
+  'travel_required':bool(payload.get('travel_required')),
+  'hotel_required':bool(payload.get('hotel_required',True)),
+  'transportation_required':bool(payload.get('transportation_required',True)),
+  'hometown':list(payload.get('hometown') or []),
+  'planned_rivalry':payload.get('planned_rivalry',''),'notes':payload.get('notes',''),
+ }
+ entry=normalize_schedule_entry(entry)
+ st.session_state.schedule_calendar=[e for e in st.session_state.schedule_calendar if not (int(e.get('week',-1))==wk and e.get('company')==comp)]
+ st.session_state.schedule_calendar.append(entry)
+ st.session_state.schedule_calendar.sort(key=lambda x:(int(x.get('week',0)),x.get('company','')))
+
+def apply_calendar_event_preset(comp,week,preset_id):
+ preset=next((p for p in CALENDAR_EVENT_PRESETS if p['id']==preset_id),None)
+ if not preset: return
+ if preset.get('nxt_only') and comp!='NXT': return
+ defs=week_editor_defaults(comp,week)
+ vmatch=next((dict(x) for x in VENUES if x.get('type')==preset.get('venue_type','Arena') and x.get('country')=='United States'),None) or (VENUES[0] if VENUES else {})
+ payload={
+  'show_name':preset['names'].get(comp,preset['names'].get('NXT',f'{comp} Special')),
+  'company':comp,'show_type':preset['show_type'],
+  'date':defs['date'],'status':'Planned',
+  'country':vmatch.get('country','United States'),'region':vmatch.get('region','California'),
+  'city':vmatch.get('city','Los Angeles'),'venue':vmatch.get('venue','Custom Venue'),
+  'capacity':preset.get('capacity',vmatch.get('capacity',15000)),'venue_type':preset.get('venue_type','Arena'),
+  'rental_cost':preset.get('rental_cost',vmatch.get('rental_cost',400000)),
+  'security_cost':preset.get('security_cost',vmatch.get('security_cost',125000)),
+  'travel_cost':preset.get('travel_cost',100000),
+  'travel_multiplier':preset.get('travel_multiplier',1.1),
+  'ticket_multiplier':preset.get('ticket_multiplier',1.0),
+  'ticket_price':preset.get('ticket_price',65),
+  'travel_required':preset.get('travel_multiplier',1.0)>1.15,
+  'hotel_required':True,'transportation_required':True,
+  'planned_rivalry':'','notes':f"Preset: {preset['label']}",'hometown':[],
+ }
+ save_calendar_full_entry(comp,week,payload)
+ calendar_autosave(comp)
+
+def calendar_year_summary(comp=None):
+ rows=[normalize_schedule_entry(dict(e)) for e in st.session_state.schedule_calendar if not comp or e.get('company')==comp]
+ cur=int(st.session_state.get('week',0))
+ total_events=len(rows)
+ total_venue=sum(int(e.get('venue_cost',0))+int(e.get('security_cost',0)) for e in rows)
+ total_travel=sum(int(e.get('transport_estimate',0))+int(e.get('hotel_estimate',0)) for e in rows)
+ biggest=None
+ if rows:
+  biggest=max(rows,key=lambda e:(int(e.get('projected_attendance',0)),int(e.get('capacity',0))))
+ upcoming=None
+ future=[e for e in rows if int(e.get('week',0))>cur and e.get('status')!='Completed']
+ if future:
+  upcoming=min(future,key=lambda e:int(e.get('week',0)))
+ elif rows:
+  upcoming=min(rows,key=lambda e:int(e.get('week',0)))
+ return {'total_events':total_events,'total_venue':total_venue,'total_travel':total_travel,'biggest':biggest,'upcoming':upcoming,'filled':total_events}
+
+def render_calendar_summary_panel(comp):
+ summ=calendar_year_summary(comp)
+ st.markdown('<div class="cal-summary-card"><b>Year at a glance</b></div>',unsafe_allow_html=True)  # header strip
+ c1,c2,c3,c5,c6=st.columns(5)
+ c1.metric('Yearly events',summ['total_events'])
+ c2.metric('Est. venue+security',money(summ['total_venue']))
+ c3.metric('Est. travel+logistics',money(summ['total_travel']))
+ b=summ.get('biggest')
+ c5.metric('Biggest show',(b.get('show_name','—')[:22] if b else '—'))
+ u=summ.get('upcoming')
+ c6.metric('Next show',(f"Wk {u.get('week')} {u.get('show_name','')[:14]}" if u else '—'))
+ autosave.render_autosave_indicator('cal_plan_as')
+
+def calendar_venue_fields_editor(week,defs,locked=False):
+ """Inline venue/location/cost fields for selected week."""
+ k=f'ced_{week}'
+ countries=sorted(set(COUNTRIES+[v['country'] for v in VENUES]))
+ co_idx=countries.index(defs['country']) if defs['country'] in countries else 0
+ country=st.selectbox('Country',countries,index=co_idx,key=k+'_co',disabled=locked)
+ if country=='United States':
+  venue_regs=sorted(set(v['region'] for v in VENUES if v['country']=='United States'))
+  regs=sorted(set(US_STATES+venue_regs))
+ else:
+  regs=sorted(set(v['region'] for v in VENUES if v['country']==country)) or ['Custom Region']
+ reg_idx=regs.index(defs['region']) if defs['region'] in regs else 0
+ region=st.selectbox('State/Region',regs,index=reg_idx,key=k+'_reg',disabled=locked)
+ cities=sorted(set(v['city'] for v in VENUES if v['country']==country and v['region']==region)) or ['Custom City']
+ city_idx=cities.index(defs['city']) if defs['city'] in cities else 0
+ city=st.selectbox('City',cities,index=city_idx,key=k+'_city',disabled=locked)
+ vs=[v for v in VENUES if v['country']==country and v['region']==region and v['city']==city]
+ vnames=[v['venue'] for v in vs]+['Custom Venue']
+ vn_idx=vnames.index(defs['venue']) if defs['venue'] in vnames else (len(vnames)-1 if defs['venue']=='Custom Venue' else 0)
+ vn=st.selectbox('Arena/Stadium',vnames,index=min(vn_idx,len(vnames)-1),key=k+'_vn',disabled=locked)
+ if vn=='Custom Venue':
+  venue_name=st.text_input('Custom venue name',defs['venue'] if defs['venue']!='Custom Venue' else 'Custom Venue',key=k+'_cv',disabled=locked)
+  vtype=st.selectbox('Venue type',['Arena','Stadium','Performance Center'],index=['Arena','Stadium','Performance Center'].index(defs.get('venue_type','Arena')) if defs.get('venue_type') in ('Arena','Stadium','Performance Center') else 0,key=k+'_vt',disabled=locked)
+  cap=st.number_input('Capacity',1000,150000,int(defs['capacity']),key=k+'_cap',disabled=locked)
+  rental=st.number_input('Rental cost',0,10000000,int(defs['rental_cost']),key=k+'_rent',disabled=locked)
+  security=st.number_input('Security cost',0,5000000,int(defs['security_cost']),key=k+'_sec',disabled=locked)
+  travel_cost=st.number_input('Travel / logistics cost',0,5000000,int(defs['travel_cost']),key=k+'_trv',disabled=locked)
+  travel_mult=st.number_input('Travel multiplier',.5,3.0,float(defs['travel_multiplier']),key=k+'_tm',disabled=locked)
+  ticket_mult=st.number_input('Ticket multiplier',.5,3.0,float(defs['ticket_multiplier']),key=k+'_tick',disabled=locked)
+  return {'country':country,'region':region,'city':city,'venue':venue_name,'capacity':int(cap),'venue_type':vtype,
+   'rental_cost':int(rental),'security_cost':int(security),'travel_cost':int(travel_cost),
+   'travel_multiplier':float(travel_mult),'ticket_multiplier':float(ticket_mult)}
+ v=next(x for x in vs if x['venue']==vn)
+ v=dict(v); v.setdefault('travel_cost',int(250000*v.get('travel_multiplier',1.1)))
+ cap=st.number_input('Capacity',1000,150000,int(defs.get('capacity',v.get('capacity',15000))),key=k+'_cap',disabled=locked)
+ rental=st.number_input('Rental cost',0,10000000,int(defs.get('rental_cost',v.get('rental_cost',400000))),key=k+'_rent',disabled=locked)
+ security=st.number_input('Security cost',0,5000000,int(defs.get('security_cost',v.get('security_cost',125000))),key=k+'_sec',disabled=locked)
+ travel_cost=st.number_input('Travel / logistics cost',0,5000000,int(defs.get('travel_cost',v.get('travel_cost',100000))),key=k+'_trv',disabled=locked)
+ travel_mult=st.number_input('Travel multiplier',.5,3.0,float(defs.get('travel_multiplier',v.get('travel_multiplier',1.1))),key=k+'_tm',disabled=locked)
+ ticket_mult=st.number_input('Ticket multiplier',.5,3.0,float(defs.get('ticket_multiplier',v.get('ticket_multiplier',1.0))),key=k+'_tick',disabled=locked)
+ return {'country':country,'region':region,'city':city,'venue':vn,'capacity':int(cap),'venue_type':v.get('type','Arena'),
+  'rental_cost':int(rental),'security_cost':int(security),'travel_cost':int(travel_cost),
+  'travel_multiplier':float(travel_mult),'ticket_multiplier':float(ticket_mult)}
+
+def render_calendar_week_editor(comp,locked=False):
+ ensure_calendar_selection(comp)
+ week=int(st.session_state.get('cal_pick_week',next_bookable_week()))
+ month=month_for_week(week)
+ defs=week_editor_defaults(comp,week)
+ st.markdown(f'##### Edit show — **{month}** · Week **{week}**')
+ if locked:
+  st.caption('Schedule locked — view only.')
+  ex=get_scheduled_show(comp,week)
+  if ex:
+   st.markdown(f"**{ex.get('show_name','')}** · {format_schedule_date_short(ex)} · {ex.get('show_type','')}")
+   st.markdown(f"{format_schedule_location(ex)} · {ex.get('venue','')}")
+  return
+ avail_presets=[p for p in CALENDAR_EVENT_PRESETS if not (p.get('nxt_only') and comp!='NXT')]
+ p1,p2=st.columns([.72,.28])
+ with p1:
+  preset_labels=[p['label'] for p in avail_presets]
+  preset_pick=st.selectbox('Yearly event preset',preset_labels,key=f'cal_pre_sel_{comp}_{week}')
+ with p2:
+  st.markdown('<div style="height:28px"></div>',unsafe_allow_html=True)
+  if st.button('Apply preset',key=f'cal_pre_go_{comp}_{week}',use_container_width=True):
+   pid=next(p['id'] for p in avail_presets if p['label']==preset_pick)
+   apply_calendar_event_preset(comp,week,pid)
+   st.toast(f'Applied {preset_pick}')
+   st.rerun()
+ with st.form(key=f'cal_week_form_{comp}_{week}',clear_on_submit=False):
+  st.markdown('**Show**')
+  s1,s2,s3=st.columns(3)
+  with s1:
+   show_name=st.text_input('Show name',defs['show_name'],key=f'ced_{week}_sn')
+  with s2:
+   brand=st.selectbox('Brand',PLAYABLE,index=PLAYABLE.index(defs['company']) if defs['company'] in PLAYABLE else PLAYABLE.index(comp),key=f'ced_{week}_br')
+  with s3:
+   stype=st.selectbox('Show type',CALENDAR_SHOW_TYPES,index=CALENDAR_SHOW_TYPES.index(defs['show_type']) if defs['show_type'] in CALENDAR_SHOW_TYPES else 0,key=f'ced_{week}_st')
+  d1,d2=st.columns(2)
+  with d1:
+   show_date=st.text_input('Date (MM/DD/YYYY)',defs['date'],key=f'ced_{week}_dt',placeholder='06/06/2026')
+  with d2:
+   status=st.selectbox('Status',CALENDAR_STATUSES,index=CALENDAR_STATUSES.index(defs['status']) if defs['status'] in CALENDAR_STATUSES else 0,key=f'ced_{week}_status')
+  st.markdown('**Venue & costs**')
+  venue=calendar_venue_fields_editor(week,defs,locked=False)
+  ticket_px=st.number_input('Ticket price ($)',0,500,int(defs['ticket_price']),key=f'ced_{week}_tp')
+  l1,l2,l3=st.columns(3)
+  with l1:
+   travel_req=st.checkbox('Travel required',value=defs['travel_required'],key=f'ced_{week}_trv')
+  with l2:
+   hotel_req=st.checkbox('Hotel required',value=defs['hotel_required'],key=f'ced_{week}_htl')
+  with l3:
+   transport_req=st.checkbox('Transport required',value=defs['transportation_required'],key=f'ced_{week}_xport')
+  rivalry=st.text_input('Planned rivalry',defs['planned_rivalry'],key=f'ced_{week}_riv')
+  notes=st.text_area('Notes',defs['notes'],key=f'ced_{week}_notes',height=68)
+  b1,b2,b3=st.columns(3)
+  save=b1.form_submit_button('💾 Save week (auto-save)',type='primary',use_container_width=True)
+  clear=b2.form_submit_button('Clear week',use_container_width=True)
+  dup=b3.form_submit_button('Duplicate to next week',use_container_width=True)
+  if save:
+   payload={'show_name':show_name,'company':brand,'show_type':stype,'date':show_date,'status':status,
+    'ticket_price':ticket_px,'travel_required':travel_req,'hotel_required':hotel_req,'transportation_required':transport_req,
+    'planned_rivalry':rivalry,'notes':notes,'hometown':defs['hometown'],**venue}
+   save_calendar_full_entry(comp,week,payload)
+   calendar_autosave(comp)
+   st.toast(f'Saved Week {week} — auto-saved')
+   st.rerun()
+  if clear:
+   delete_calendar_week_entry(comp,week)
+   calendar_autosave(comp)
+   st.toast(f'Cleared Week {week}')
+   st.rerun()
+  if dup:
+   payload={'show_name':show_name+' (copy)','company':brand,'show_type':stype,'date':show_date,'status':'Planned',
+    'ticket_price':ticket_px,'travel_required':travel_req,'hotel_required':hotel_req,'transportation_required':transport_req,
+    'planned_rivalry':rivalry,'notes':notes,'hometown':defs['hometown'],**venue}
+   nw=min(52,week+1)
+   save_calendar_full_entry(comp,nw,payload)
+   st.session_state.cal_pick_week=nw
+   calendar_autosave(comp)
+   st.toast(f'Duplicated to Week {nw}')
+   st.rerun()
+ ex=get_scheduled_show(comp,week)
+ if ex:
+  render_venue_cost_preview(ex.get('venue_data') or {})
+  pl_txt,_=format_schedule_pl_display(ex)
+  st.caption(f"Est. attendance **{int(ex.get('projected_attendance',0)):,}** · P/L **{pl_txt}**")
+
+def render_yearly_calendar_grid(comp,locked=False):
+ yr=calendar_display_year()
+ pick=int(st.session_state.get('cal_pick_week',0))
+ st.markdown('<div class="cal-year-scroll-wrap">',unsafe_allow_html=True)
+ for month,global_weeks in MONTH_WEEK_RANGES:
+  slots=month_week_slots(month)
+  filled=calendar_month_fill_count(comp,global_weeks)
+  st.markdown(
+   f'<div class="cal-month-card"><div class="cal-month-card-hdr"><span>{month} {yr}</span>'
+   f'<span class="cal-month-card-sub">{filled}/{len(slots)} weeks filled</span></div></div>',
+   unsafe_allow_html=True,
+  )
+  cols=st.columns(len(slots))
+  for col,(local_w,gw) in zip(cols,slots):
+   with col:
+    ex=get_scheduled_show(comp,gw)
+    sn=(ex.get('show_name','') if ex else '')[:20] or '+ Add show'
+    stype=(ex.get('show_type','') if ex else '')[:12]
+    btn_lbl=f"Week {local_w}\n{sn}"
+    if stype and ex: btn_lbl+=f"\n{stype}"
+    sel=gw==pick
+    if st.button(btn_lbl,key=f'cal_cell_{comp}_{gw}',use_container_width=True,disabled=locked and not ex,type='primary' if sel else 'secondary'):
+     st.session_state.cal_pick_week=gw
+     st.session_state.cal_pick_comp=comp
+     st.rerun()
+ st.markdown('</div>',unsafe_allow_html=True)
+
+def render_month_at_a_glance(comp,month,yr=None):
+ """Compact 4-week view for one month."""
+ yr=yr or calendar_display_year()
+ slots=month_week_slots(month)
+ parts=[f'<table class="cal-month-grid"><thead><tr><th>Week</th><th>Date</th><th>Show</th><th>Location</th></tr></thead><tbody>']
+ for local_w,gw in slots:
+  ex=get_scheduled_show(comp,gw)
+  if ex:
+   parts.append(f'<tr><td>Week {local_w}</td><td>{html_escape(format_schedule_date_short(ex))}</td>'
+    f'<td>{html_escape(ex.get("show_name",""))}</td><td>{html_escape(format_schedule_location(ex))}</td></tr>')
+  else:
+   parts.append(f'<tr><td>Week {local_w}</td><td>{format_date_us(default_date_for_week(gw))}</td><td colspan="2" style="color:#666">Empty</td></tr>')
+ parts.append('</tbody></table>')
+ st.markdown(''.join(parts),unsafe_allow_html=True)
+
+def render_calendar_yearly_planner(comp,locked=False):
+ """Simple calendar: pick month + week, fill a short form, save."""
+ yr=calendar_display_year()
+ summ=calendar_year_summary(comp)
+ m1,m2,m3,m4=st.columns(4)
+ m1.metric('Shows booked',summ['total_events'])
+ m2.metric('Est. venue cost',money(summ['total_venue']))
+ m3.metric('Est. travel',money(summ['total_travel']))
+ u=summ.get('upcoming')
+ m4.metric('Next show',(f"Week {u.get('week')}" if u else '—'))
+ autosave.render_autosave_indicator('cal_plan_as')
+ st.markdown('---')
+ pick_m,pick_w=st.columns(2)
+ jump=default_calendar_expand_month(comp)
+ with pick_m:
+  month=st.selectbox('Month',CALENDAR_MONTHS,index=CALENDAR_MONTHS.index(jump),key=f'cal_simple_m_{comp}')
+ with pick_w:
+  slots=month_week_slots(month)
+  labels=[f'Week {lw}' for lw,gw in slots]
+  slot_ix=st.selectbox('Week in month',range(len(labels)),format_func=lambda i:labels[i],key=f'cal_simple_w_{comp}_{month}')
+ local_w,global_w=slots[slot_ix]
+ st.session_state.cal_pick_week=global_w
+ st.caption(f'**{month} {yr}** · Year week **{global_w}** · Date format **MM/DD/YYYY** (e.g. 01/10/{yr})')
+ ex=get_scheduled_show(comp,global_w)
+ if ex and locked:
+  st.info(f"**{ex.get('show_name')}** · {format_schedule_date_short(ex)} · {ex.get('show_type')} · {format_schedule_location(ex)} · ${int(ex.get('ticket_price',65))}")
+  render_month_at_a_glance(comp,month,yr)
+  return
+ defs=week_editor_defaults(comp,global_w)
+ stype_opts=list(CALENDAR_QUICK_TYPES)
+ if defs['show_type'] not in stype_opts: stype_opts.append(defs['show_type'])
+ with st.form(f'cal_simple_{comp}_{global_w}',border=True):
+  show_name=st.text_input('Show name',defs['show_name'])
+  r1,r2,r3=st.columns(3)
+  with r1:
+   show_date=st.text_input('Date',defs['date'],placeholder='01/10/2026')
+  with r2:
+   stype=st.selectbox('Show type',stype_opts,index=stype_opts.index(defs['show_type']) if defs['show_type'] in stype_opts else 0)
+  with r3:
+   ticket=st.number_input('Ticket $',15,500,int(defs['ticket_price']))
+  location=st.text_input('Location',format_calendar_location_input(ex) if ex else '',placeholder='New York, NY — Madison Square Garden')
+  if not locked:
+   if st.form_submit_button('Save show',type='primary',use_container_width=True):
+    if not (show_name or '').strip() and not (location or '').strip():
+     st.error('Add a show name or location.')
+    else:
+     save_calendar_week_entry(comp,global_w,show_name,show_date,location,ticket,stype,ex.get('status','Planned') if ex else 'Planned')
+     calendar_autosave(comp)
+     st.toast(f'Saved Week {local_w} ({month})')
+     st.rerun()
+ if not locked:
+  with st.expander('Venue & costs (optional)',expanded=False):
+   vk=f'cav_{comp}_{global_w}'
+   venue=venue_selector(vk)
+   cap=st.number_input('Capacity',1000,150000,int(venue.get('capacity',15000)),key=f'{vk}_cap2')
+   venue['capacity']=int(cap)
+   if st.button('Save with venue details',key=f'{vk}_save',type='secondary'):
+    payload={'show_name':defs['show_name'],'company':comp,'show_type':defs['show_type'],'date':defs['date'],'status':defs['status'],
+     'ticket_price':defs['ticket_price'],'travel_required':defs['travel_required'],'hotel_required':defs['hotel_required'],
+     'transportation_required':defs['transportation_required'],'planned_rivalry':defs['planned_rivalry'],'notes':defs['notes'],
+     'hometown':defs['hometown'],'country':venue['country'],'region':venue['region'],'city':venue['city'],'venue':venue['venue'],
+     'capacity':int(cap),'venue_type':venue.get('type','Arena'),'rental_cost':int(venue.get('rental_cost',400000)),
+     'security_cost':int(venue.get('security_cost',125000)),'travel_cost':int(venue.get('travel_cost',100000)),
+     'travel_multiplier':float(venue.get('travel_multiplier',1.1)),'ticket_multiplier':float(venue.get('ticket_multiplier',1.0))}
+    save_calendar_full_entry(comp,global_w,payload)
+    calendar_autosave(comp)
+    st.toast('Venue details saved'); st.rerun()
+  with st.expander('Big event presets (PLE, Rumble, etc.)',expanded=False):
+   avail=[p for p in CALENDAR_EVENT_PRESETS if not (p.get('nxt_only') and comp!='NXT')]
+   plabels=[p['label'] for p in avail]
+   preset=st.selectbox('Event template',plabels,key=f'cal_pre_{comp}_{global_w}')
+   if st.button('Apply to this week',key=f'cal_pre_apply_{comp}_{global_w}'):
+    pid=next(p['id'] for p in avail if p['label']==preset)
+    apply_calendar_event_preset(comp,global_w,pid)
+    st.toast(f'Applied {preset}'); st.rerun()
+  with st.expander('How calendar fields work',expanded=False):
+   st.markdown('**Location** = City, State — Venue. **Ticket $** = base price. Use **Venue & costs** for rental, security, travel multiplier, and ticket multiplier. Lock the year when done planning.')
+ st.markdown(f'##### {month} {yr} at a glance')
+ render_month_at_a_glance(comp,month,yr)
 
 def next_bookable_week():
  return int(st.session_state.get('week',0))+1
@@ -5935,16 +7223,152 @@ def format_schedule_location(e):
  return city
 
 def format_schedule_date_short(e):
- d=str(e.get('date') or '').strip()
+ if e.get('date_display'):
+  return str(e['date_display'])
+ d=e.get('date')
  if not d: return '—'
- try:
-  parts=d.split('-')
-  if len(parts)>=3:
-   y,m,day=int(parts[0]),int(parts[1]),int(parts[2])
-   months=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-   return f'{months[m]} {day}, {y}' if m<13 else d
- except (ValueError, IndexError): pass
- return d[:14]
+ us=format_date_us(d)
+ return us if us else '—'
+
+def render_calendar_entry_guide():
+ """In-app Calendar Entry Guide for GM Mode."""
+ st.markdown(
+  '<div class="cal-guide-hero"><h3>📅 Calendar Entry Guide</h3>'
+  '<p>Schedule and customize every show throughout the year. Every decision affects your budget, attendance, popularity, and logistics costs.</p></div>',
+  unsafe_allow_html=True,
+ )
+ with st.expander('🗓️ Month & Week',expanded=True):
+  st.markdown('**Month** — choose which month the event takes place (January–December).')
+  st.markdown('**Week Number** — which week of the **52-week year** (Week 1–52). This sets where the show appears on your calendar.')
+  st.caption('⚠️ Once the season starts, changing dates may affect continuity and scheduling.')
+ with st.expander('📅 Date',expanded=False):
+  st.markdown('The exact date the event happens. Use **MM/DD/YYYY** in the planner (e.g. **06/06/2026**).')
+  st.markdown('Used for storyline continuity, injury recovery, contract expirations, and sponsor deadlines.')
+ with st.expander('🎤 Show Name & 🎭 Show Type',expanded=False):
+  st.markdown('**Show Name** — official event title (e.g. *NXT Week 1*, *WCW Monday Nitro*, *SmackDown Live*, *NXT Great American Bash*).')
+  st.markdown('**Show Type** sets importance and scale:')
+  st.markdown('- **Weekly Show** — regular TV; lower costs, standard revenue\n- **PLE / Stadium Show** — higher attendance, larger venues, bigger expenses, better popularity gains\n- **Special Event** — crossovers, tournament finals, international specials')
+  st.caption('💡 Use unique names for Premium Live Events (PLEs).')
+ with st.expander('🌍 Location — Country, Region, City, Arena',expanded=False):
+  st.markdown('Set these in the **Full calendar entry** editor (Plan Schedule tab):')
+  st.markdown('- **Country** — affects travel costs, ticket demand, international popularity\n- **State/Region** — local market (e.g. California, New South Wales, Ontario)\n- **City** — fan interest and venue options (Sydney, New York City, Toronto)\n- **Arena/Stadium** — pick a preset venue or **Custom Venue** (NXT Dome, WCW Arena, etc.)')
+ with st.expander('🏟️ Capacity & Venue Type',expanded=False):
+  st.markdown('**Capacity** — max fans the venue holds (e.g. 15,000 seats).')
+  c1,c2=st.columns(2)
+  with c1:
+   st.markdown('**Larger capacity**\n- ✅ Higher potential revenue\n- ❌ Harder to sell out')
+  with c2:
+   st.markdown('**Smaller capacity**\n- ✅ Easier sell-outs\n- ❌ Lower max income')
+  st.markdown('| Type | Fans | Best for |\n|---|---|---|\n| Arena | 5,000–20,000 | Weekly shows |\n| Stadium | 20,000+ | PLEs |\n| Performance Center | Small | Lower expenses |')
+ with st.expander('💰 Rental & 🛡️ Security',expanded=False):
+  st.markdown('**Rental** — cost to rent the venue (e.g. $400,000). Higher-profile venues cost more but draw more fans.')
+  st.markdown('**Security** — event security spend (e.g. $125,000). Higher security reduces backstage risk; lower saves money.')
+ with st.expander('✈️ Travel / Logistics & 🌎 Travel Multiplier',expanded=False):
+  st.markdown('**Travel / Logistics** — base cost to move roster and crew (flights, hotels, equipment, staff).')
+  st.markdown('**Final Travel Cost** = Travel/Logistics × **Travel Multiplier**')
+  st.markdown('Example: $100,000 base × 1.10 = **$110,000** final travel.')
+  st.markdown('| Location | Multiplier |\n|---|---|\n| Local state | 1.00× |\n| Different state | 1.10× |\n| Cross country | 1.25× |\n| Canada/Mexico | 1.50× |\n| Europe | 2.00× |\n| Australia | 2.50× |\n| Asia | 3.00× |')
+  st.caption('⚠️ A show in Australia should use ~2.50×, not 1.10×.')
+ with st.expander('🎟️ Ticket Price & Ticket Multiplier',expanded=False):
+  st.markdown('**Ticket Price** — base fan ticket cost per seat.')
+  st.markdown('**Ticket Revenue** ≈ Attendance × Ticket Price × **Ticket Multiplier**')
+  st.markdown('Example: $1,000,000 normal × 1.25 multiplier = **$1,250,000** revenue.')
+  st.markdown('| Event type | Multiplier |\n|---|---|\n| Small weekly show | 1.00× |\n| Popular market | 1.10× |\n| Major city | 1.25× |\n| PLE | 1.50× |\n| WrestleMania-level | 2.00× |')
+ with st.expander('💡 Strategy Tips',expanded=False):
+  st.markdown('**Weekly shows** — smaller arenas, low travel multiplier, focus on profit.')
+  st.markdown('**PLEs** — larger venues, higher ticket multiplier, expect higher expenses.')
+  st.markdown('**International tours** — gain international popularity and merch; prepare for much higher travel costs.')
+  st.markdown('Every choice affects budget, fan satisfaction, popularity, and long-term GM success. 🏆')
+
+def render_venue_cost_preview(venue):
+ if not venue: return
+ st.markdown('##### Venue economics preview')
+ c1,c2,c3,c4,c5=st.columns(5)
+ c1.metric('Capacity',f"{int(venue.get('capacity',0)):,}")
+ c2.metric('Rental',money(venue.get('rental_cost',0)))
+ c3.metric('Security',money(venue.get('security_cost',0)))
+ c4.metric('Travel mult',f"{float(venue.get('travel_multiplier',1.0)):.2f}×")
+ c5.metric('Ticket mult',f"{float(venue.get('ticket_multiplier',1.0)):.2f}×")
+ st.caption(f"Type: **{venue.get('type','Arena')}** · Prestige **{venue.get('prestige',5)}**/10 · Market bonus {money(venue.get('market_bonus',0))}")
+
+def _render_calendar_locked_month(cal_comp,month,weeks,yr):
+ parts=[f'<table class="cal-month-grid"><thead><tr><th>Wk</th><th>Date</th><th>Event</th><th>Location</th><th>Ticket</th><th>Type</th></tr></thead><tbody>']
+ for week in weeks:
+  ex=get_scheduled_show(cal_comp,week)
+  if ex:
+   parts.append(
+    f'<tr><td>{week}</td><td>{html_escape(format_schedule_date_short(ex))}</td>'
+    f'<td>{html_escape(ex.get("show_name",""))}</td><td>{html_escape(format_schedule_location(ex))}</td>'
+    f'<td>${int(ex.get("ticket_price",65))}</td><td>{html_escape(ex.get("show_type",""))}</td></tr>'
+   )
+  else:
+   d=format_date_us(default_date_for_week(week))
+   parts.append(f'<tr><td>{week}</td><td>{d}</td><td colspan="4" style="color:#666">—</td></tr>')
+ parts.append('</tbody></table>')
+ st.markdown(''.join(parts),unsafe_allow_html=True)
+
+def _render_calendar_month_form(cal_comp,month,weeks,yr):
+ row_buf=[]
+ with st.form(key=f'cal_form_{cal_comp}_{month}',clear_on_submit=False,border=False):
+  hdr=st.columns([.07,.12,.32,.32,.1,.09])
+  hdr[0].markdown('<div class="cal-week-hdr">Wk</div>',unsafe_allow_html=True)
+  hdr[1].markdown('<div class="cal-week-hdr">Date</div>',unsafe_allow_html=True)
+  hdr[2].markdown('<div class="cal-week-hdr">Event</div>',unsafe_allow_html=True)
+  hdr[3].markdown('<div class="cal-week-hdr">Location</div>',unsafe_allow_html=True)
+  hdr[4].markdown('<div class="cal-week-hdr">Ticket $</div>',unsafe_allow_html=True)
+  hdr[5].markdown('<div class="cal-week-hdr">Type</div>',unsafe_allow_html=True)
+  for week in weeks:
+   ex=get_scheduled_show(cal_comp,week)
+   defs=calendar_week_defaults(cal_comp,week)
+   k=f'{cal_comp}_{week}'
+   dot='cal-week-dot-filled' if ex else 'cal-week-dot-empty'
+   c0,c1,c2,c3,c4,c5=st.columns([.07,.12,.32,.32,.1,.09])
+   c0.markdown(f'<span class="cal-week-dot {dot}"></span>**{week}**',unsafe_allow_html=True)
+   date_val=c1.text_input('Date',value=defs['date'],key=f'cal_d_{k}',label_visibility='collapsed',placeholder='01/10/2026')
+   event_val=c2.text_input('Event',value=defs['event'],key=f'cal_e_{k}',label_visibility='collapsed')
+   loc_val=c3.text_input('Location',value=defs['location'],key=f'cal_l_{k}',label_visibility='collapsed',placeholder='City, ST — Venue')
+   ticket_val=c4.number_input('Ticket',min_value=15,max_value=500,value=int(defs['ticket']),key=f'cal_p_{k}',label_visibility='collapsed')
+   stype_opts=CALENDAR_QUICK_TYPES if defs['stype'] in CALENDAR_QUICK_TYPES else CALENDAR_QUICK_TYPES+[defs['stype']]
+   stype_val=c5.selectbox('Type',stype_opts,index=stype_opts.index(defs['stype']) if defs['stype'] in stype_opts else 0,key=f'cal_t_{k}',label_visibility='collapsed')
+   row_buf.append({'week':week,'date':date_val,'event':event_val,'location':loc_val,'ticket':ticket_val,'stype':stype_val})
+  save=st.form_submit_button(f'Save {month}',type='primary',use_container_width=True)
+  if save:
+   n=save_calendar_month_batch(cal_comp,month,row_buf)
+   if n:
+    touch_universe_meta(cal_comp); save_universe()
+    st.toast(f'Saved {month} — {n} week(s) updated')
+    st.rerun()
+   else:
+    st.warning('Nothing to save — add an event or location.')
+
+def render_calendar_month_planner(cal_comp,locked=False):
+ """Full year by month — compact expanders, one save per month, MM/DD/YYYY dates."""
+ yr=calendar_display_year()
+ filled=sum(1 for e in st.session_state.schedule_calendar if e.get('company')==cal_comp)
+ pct=min(100,int(100*filled/52)) if filled else 0
+ jump_month=default_calendar_expand_month(cal_comp)
+ st.markdown(
+  f'<div class="cal-planner-toolbar">'
+  f'<div class="cal-planner-progress"><div style="font-weight:800;color:#fff">{html_escape(cal_comp)} schedule</div>'
+  f'<div style="font-size:12px;color:#a8a0c8">{filled}/52 weeks · Dates <b>MM/DD/YYYY</b> (e.g. 01/10/{yr}) · See <b>Entry Guide</b> tab for field help</div>'
+  f'<div class="cal-planner-progress-bar"><div class="cal-planner-progress-fill" style="width:{pct}%"></div></div></div></div>',
+  unsafe_allow_html=True,
+ )
+ j1,j2=st.columns([.55,.45])
+ with j1:
+  focus=st.selectbox('Jump to month',CALENDAR_MONTHS,index=CALENDAR_MONTHS.index(jump_month),key=f'cal_jump_{cal_comp}')
+ with j2:
+  expand_all=st.toggle('Show all months',value=st.session_state.get(f'cal_expand_all_{cal_comp}',False),key=f'cal_expand_all_{cal_comp}')
+ for month,weeks in MONTH_WEEK_RANGES:
+  done=calendar_month_fill_count(cal_comp,weeks)
+  total=len(weeks)
+  label=f'{month} {yr} · {done}/{total} weeks'
+  expanded=expand_all or month==focus
+  with st.expander(label,expanded=expanded):
+   if locked:
+    _render_calendar_locked_month(cal_comp,month,weeks,yr)
+   else:
+    _render_calendar_month_form(cal_comp,month,weeks,yr)
 
 def format_schedule_pl_display(e):
  pl=int(e.get('projected_profit_loss',0) or 0)
@@ -5984,10 +7408,11 @@ def render_calendar_readable_cards(rows):
    f'<div class="cal-r-line"><span class="cal-r-label">Show name</span> <span class="cal-r-val">{html_escape(show)}</span></div>'
    f'<div class="cal-r-line"><span class="cal-r-label">Location</span> <span class="cal-r-loc">{html_escape(loc)}</span></div>'
    f'<div class="cal-r-line"><span class="cal-r-label">Venue</span> <span class="cal-r-venue">{html_escape(venue)}</span></div>'
+   f'<div class="cal-r-line"><span class="cal-r-label">Ticket price</span> <span class="cal-r-val">${int(e.get("ticket_price",65))}</span></div>'
    f'<div class="cal-r-line"><span class="cal-r-label">Capacity</span> <span class="cal-r-val">{int(e.get("capacity",0)):,}</span></div>'
    f'<div class="cal-r-line"><span class="cal-r-label">Est. attendance</span> <span class="cal-r-val">{int(e.get("projected_attendance",0)):,}</span></div>'
    f'<div class="cal-r-line"><span class="cal-r-label">Est. profit/loss</span> <span class="{pl_cls}">{html_escape(pl_txt)}</span></div>'
-   f'<div class="cal-r-line"><span class="cal-r-label">Status</span> <span class="cal-status-pill">{html_escape(stt)}</span></div>'
+   f'<div class="cal-r-line"><span class="cal-r-label">Status</span> <span class="cal-status-pill {stt.lower().replace(" ","-")}">{html_escape(stt)}</span></div>'
    f'</div>'
   )
  parts.append('</div>')
@@ -5998,7 +7423,7 @@ def render_calendar_year_table(rows):
  parts=['<div class="cal-yscroll"><table class="cal-schedule-table"><thead><tr>',
   '<th class="col-week">Week</th><th class="col-date">Date</th><th class="col-brand">Brand</th>',
   '<th class="col-show">Show</th><th class="col-type">Type</th><th class="col-location">Location</th>',
-  '<th class="col-venue">Venue</th><th class="col-cap">Capacity</th><th class="col-att">Est. Att.</th>',
+  '<th class="col-venue">Venue</th><th class="col-ticket">Ticket $</th><th class="col-cap">Capacity</th><th class="col-att">Est. Att.</th>',
   '<th class="col-pl">Est. P/L</th><th class="col-status">Status</th></tr></thead><tbody>']
  for e in rows:
   loc=html_escape(format_schedule_location(e))
@@ -6015,10 +7440,11 @@ def render_calendar_year_table(rows):
    f'<td class="col-type">{html_escape(e.get("show_type") or "—")}</td>'
    f'<td class="col-location">{loc}</td>'
    f'<td class="col-venue">{venue}</td>'
+   f'<td class="col-ticket">${int(e.get("ticket_price",65))}</td>'
    f'<td class="col-cap">{int(e.get("capacity",0)):,}</td>'
    f'<td class="col-att">{int(e.get("projected_attendance",0)):,}</td>'
    f'<td class="col-pl {pl_cls}">{html_escape(pl_txt)}</td>'
-   f'<td class="col-status"><span class="cal-status-pill">{stt}</span></td></tr>'
+   f'<td class="col-status"><span class="cal-status-pill {stt.lower().replace(" ","-")}">{stt}</span></td></tr>'
   )
  parts.append('</tbody></table></div>')
  st.markdown(''.join(parts),unsafe_allow_html=True)
@@ -6027,8 +7453,12 @@ def calendar_entry_index(e):
  return f"{e.get('company','')}|{int(e.get('week',0))}"
 
 def load_calendar_entry_into_form(e):
+ st.session_state.cal_pick_week=int(e.get('week',1))
+ st.session_state.cal_pick_comp=e.get('company','NXT')
  st.session_state.cal_month=e.get('month',CALENDAR_MONTHS[0])
  st.session_state.cal_week=int(e.get('week',1))
+ st.session_state.cal_date_us=format_date_us(e.get('date'))
+ st.session_state.cal_location=format_calendar_location_input(e)
  try:
   st.session_state.cal_date=date.fromisoformat(str(e.get('date',''))[:10])
  except (ValueError, TypeError):
@@ -6386,8 +7816,42 @@ def is_tag_title(title):
 def belt_file_slug(comp,title):
  return BELT_SLUG.get((comp,title),slug(title))
 
+def ensure_champion_titles():
+ """Ensure every brand has every title slot — never wipe saved holders."""
+ for comp in PLAYABLE:
+  st.session_state.champions.setdefault(comp,{})
+  defaults=CHAMPIONS.get(comp,{})
+  for t in COMPANIES[comp]['titles']:
+   if t not in st.session_state.champions[comp]:
+    st.session_state.champions[comp][t]=defaults.get(t,'Place Holder')
+
+def champion_holder_key(holder):
+ """Canonical holder string for comparisons and storage."""
+ if is_vacant_champion(holder): return 'Vacant'
+ return (holder or '').strip()
+
+def persist_champion_selection(comp,title,new_holder,old_holder=None):
+ """Set champion and write universe to disk immediately."""
+ ensure_champion_titles()
+ old=old_holder if old_holder is not None else st.session_state.champions.get(comp,{}).get(title,'Vacant')
+ pick=champion_holder_key(new_holder)
+ prev=champion_holder_key(old)
+ if pick==prev:
+  return False,'no_change'
+ if not set_champion(comp,title,new_holder,old):
+  return False,'failed'
+ touch_universe_meta(comp)
+ st.session_state.champions_updated_at=datetime.now().isoformat(timespec='seconds')
+ try:
+  save_universe()
+ except Exception as ex:
+  return False,str(ex)
+ saved_as=st.session_state.champions.get(comp,{}).get(title,'Vacant')
+ return True,f'saved:{saved_as}'
+
 def ensure_champion_state():
  st.session_state.champions.setdefault('NXT',{}); st.session_state.champions.setdefault('SmackDown',{}); st.session_state.champions.setdefault('WCW',{})
+ ensure_champion_titles()
  if 'title_prestige' not in st.session_state:
   st.session_state.title_prestige={}
   for comp in PLAYABLE:
@@ -6405,7 +7869,9 @@ def ensure_champion_state():
    mk=title_meta_key(comp,t)
    meta=st.session_state.champion_meta.setdefault(mk,{'holder':'','reign_start_week':0,'defenses':0,'major_defenses':[],'last_defense_week':None,'last_defense_show':'','next_challenger':''})
    if not is_vacant_champion(holder) and meta.get('holder')!=holder:
-    meta['holder']=holder; meta['reign_start_week']=st.session_state.week; meta['defenses']=0; meta['major_defenses']=[]
+    meta['holder']=holder
+    if not meta.get('reign_start_week'):
+     meta['reign_start_week']=st.session_state.week; meta['defenses']=0; meta['major_defenses']=[]
 
 def get_title_prestige(comp,title):
  return int(st.session_state.title_prestige.get(title_meta_key(comp,title),DEFAULT_TITLE_PRESTIGE.get(title,82)))
@@ -6428,9 +7894,10 @@ def close_champion_reign(comp,title,holder,prestige):
 
 def set_champion(comp,title,new_holder,old_holder):
  st.session_state.champions.setdefault(comp,{})
- new_holder='Vacant' if is_vacant_champion(new_holder) else new_holder
+ store_new='Vacant' if is_vacant_champion(new_holder) else (new_holder or '').strip()
  old_holder=old_holder or st.session_state.champions[comp].get(title,'Vacant')
- if new_holder==old_holder: return False
+ if champion_holder_key(store_new)==champion_holder_key(old_holder): return False
+ new_holder=store_new
  prest=get_title_prestige(comp,title)
  if not is_vacant_champion(old_holder):
   close_champion_reign(comp,title,old_holder,prest)
@@ -6485,15 +7952,30 @@ def show_belt_img(comp,title,w=130):
  else: show_img_slot('Belt Image',w,100)
 
 def show_champion_img(name,w=110):
- p=img_path(name) or asset_path('wrestler',name)
- if p: safe_st_image(p,w,'Champion Image',105)
+ kind,src=resolve_wrestler_image(name=name)
+ if not kind:
+  p=asset_path('wrestler',name)
+  kind,src=('path',p) if p else (None,None)
+ if kind=='path': safe_st_image(src,w,'Champion Image',105)
+ elif kind=='bytes': safe_st_image(src,w,'Champion Image',105)
  else: show_img_slot('Champion Image',w,105)
 
 def show_entity_img(name,kind='wrestler',w=80):
  lbl={'belt':'Belt Image','wrestler':'Champion Image','logo':'Logo','owner':'Owner','gm':'GM','banner':'Banner'}.get(kind,'IMG')
  if not name:
   show_img_slot(lbl,w,w-10 if w>50 else 70); return
- p=asset_path(kind,name) or (img_path(name) if kind=='wrestler' else '')
+ if kind=='wrestler':
+  kind2,src=resolve_wrestler_image(name=name)
+  if kind2=='path': safe_st_image(src,w,lbl,w-10 if w>50 else 70)
+  elif kind2=='bytes': safe_st_image(src,w,lbl,w-10 if w>50 else 70)
+  else: show_img_slot(lbl,w,w-10 if w>50 else 70)
+  return
+ if kind=='podcast_host':
+  p=asset_path('podcast_host',name)
+  if p: safe_st_image(p,w,lbl,w-10 if w>50 else 70)
+  else: show_img_slot(lbl,w,w-10 if w>50 else 70)
+  return
+ p=asset_path(kind,name)
  if p: safe_st_image(p,w,lbl,w-10 if w>50 else 70)
  else: show_img_slot(lbl,w,w-10 if w>50 else 70)
 
@@ -6526,12 +8008,54 @@ def show_company_owner_imgs(comp,w=110):
 def picture_folder_map():
  return {'wrestler':'assets/wrestlers','owner':'assets/owners','gm':'assets/gm','commentator':'assets/staff','podcast host':'assets/podcast_hosts','logo':'assets/logos','banner':'assets/banners','championship belt':'assets/belts'}
 
-def save_picture_asset(kind,pic_comp,target,f=None,url=''):
+def persist_picture_to_all_sessions(comp):
+ """Save current session and copy wrestler pictures into every game session."""
+ touch_universe_meta(comp)
+ save_universe()
+ try:
+  return pic_sync.propagate_pictures_to_all_sessions(st.session_state.roster,st.session_state.get('wrestler_image_meta',{}))
+ except Exception:
+  return 0
+
+def persist_characters_to_all_sessions():
+ """Save wrestler/staff/host character profiles into every game session."""
+ st.session_state.characters_updated_at=datetime.now().isoformat(timespec='seconds')
+ save_universe()
+ try:
+  return char_sync.propagate_characters_to_all_sessions(
+   st.session_state.get('character_bible'),
+   st.session_state.get('staff_character_bible'),
+   st.session_state.get('nxt_unfiltered_hosts'),
+  )
+ except Exception:
+  return 0
+
+def persist_pictures_and_characters(comp='All'):
+ """One-click backup of portraits + character editor data across all sessions."""
+ n_pic=persist_picture_to_all_sessions(comp if comp in PLAYABLE else 'NXT')
+ n_char=persist_characters_to_all_sessions()
+ return n_pic,n_char
+
+def repair_and_sync_all_pictures():
+ """Fix broken/missing portraits — rescan disk, relink roster, sync every session."""
+ ensure_wrestler_ids()
+ stats=pic_sync.repair_all_pictures(st.session_state.roster)
+ n=pic_sync.propagate_pictures_to_all_sessions(st.session_state.roster,st.session_state.get('wrestler_image_meta',{}))
+ save_universe()
+ return stats,n
+
+def save_picture_asset(kind,pic_comp,target,f=None,url='',wrestler_id=None):
  folder_map=picture_folder_map()
  folder=folder_map.get(kind,'assets/wrestlers')
  Path(folder).mkdir(parents=True,exist_ok=True)
  if kind in ('logo','banner'): fname=slug(pic_comp)
  elif kind=='championship belt': fname=belt_file_slug(pic_comp,target)
+ elif kind=='wrestler':
+  ensure_wrestler_ids()
+  w=find_by_id(wrestler_id) if wrestler_id else find(target)
+  if w and not w.get('wrestler_id'):
+   namechg.ensure_wrestler_ids(st.session_state.roster)
+  fname=(w.get('wrestler_id') if w and w.get('wrestler_id') else None) or slug(target or '')
  else: fname=slug(target or '')
  if not fname: return False,'Pick a person or title before saving.'
  if f:
@@ -6546,7 +8070,17 @@ def save_picture_asset(kind,pic_comp,target,f=None,url=''):
     try: p.unlink(missing_ok=True)
     except OSError: pass
     return False,'Upload failed — file is not a valid image. Use png, jpg, jpeg, or webp.'
-   return True,f'Image saved as {p.as_posix()}'
+   if kind=='wrestler':
+    ensure_wrestler_ids()
+    w=find_by_id(wrestler_id) if wrestler_id else find(target)
+    if w:
+     if not w.get('wrestler_id'): namechg.ensure_wrestler_ids(st.session_state.roster)
+     touch_wrestler_image_meta(w.get('wrestler_id'),w.get('company',pic_comp))
+     roster_store.update_wrestler_image(st.session_state.roster,w['wrestler_id'],str(p),w.get('company',pic_comp))
+     roster_store.ensure_custom_roster_index(st.session_state)
+     pic_sync.register_wrestler_image(w,str(p))
+   wref=find_by_id(wrestler_id) if wrestler_id else find(target) if kind=='wrestler' else None
+   return True,f'Image saved for {wref.get("name",target) if wref else target} — {p.as_posix()}'
   except OSError as ex:
    return False,f'Could not write file: {ex}'
   except Exception as ex:
@@ -6557,10 +8091,229 @@ def save_picture_asset(kind,pic_comp,target,f=None,url=''):
    ext='.png' if '.png' in url.lower() else '.jpg'
    p=Path(folder)/f'{fname}{ext}'
    urllib.request.urlretrieve(url.strip(),p)
-   return True,f'Image downloaded to {p.as_posix()}'
+   wref=None
+   if kind=='wrestler':
+    wref=find_by_id(wrestler_id) if wrestler_id else find(target)
+    if wref:
+     touch_wrestler_image_meta(wref['wrestler_id'],wref.get('company',pic_comp))
+     roster_store.update_wrestler_image(st.session_state.roster,wref['wrestler_id'],str(p),wref.get('company',pic_comp),image_url=url.strip())
+     roster_store.ensure_custom_roster_index(st.session_state)
+     pic_sync.register_wrestler_image(wref,str(p),url.strip())
+   return True,f'Image saved for {wref.get("name",target) if wref else target} — {p.as_posix()}'
   except Exception as e:
    return False,str(e)
  return False,'Upload a file or provide a URL.'
+
+def _pic_mgr_champion_names():
+ ch=set()
+ for comp in PLAYABLE:
+  for v in st.session_state.champions.get(comp,{}).values():
+   if v and v not in ('Vacant','Place Holder','TBD - Tournament','TBD - Title Match'): ch.add(v)
+ return ch
+
+def _pic_mgr_wrestler_pool(brand,search,sort_mode):
+ ensure_wrestler_ids()
+ comps=PLAYABLE if brand=='All' else [brand]
+ rows=[]
+ champs=_pic_mgr_champion_names()
+ meta=st.session_state.get('wrestler_image_meta',{})
+ for comp in comps:
+  for w in roster(comp):
+   rows.append(w)
+ s=(search or '').strip().lower()
+ if s:
+  rows=[w for w in rows if s in (w.get('name') or '').lower() or s in (w.get('wrestler_id') or '').lower()]
+ if sort_mode=='Champions first':
+  rows=sorted(rows,key=lambda w:(0 if w.get('name') in champs else 1,(w.get('name') or '').lower()))
+ elif sort_mode=='Missing image first':
+  rows=sorted(rows,key=lambda w:(0 if not wrestler_has_image(w) else 1,(w.get('name') or '').lower()))
+ elif sort_mode=='Recently updated':
+  rows=sorted(rows,key=lambda w:(meta.get(w.get('wrestler_id') or '') or {}).get('updated_at',''),reverse=True)
+ else:
+  rows=sorted(rows,key=lambda w:(w.get('name') or '').lower())
+ return rows,champs
+
+def render_picture_manager_wrestler_gallery():
+ """Scrollable paginated wrestler image grid — full roster per brand."""
+ ensure_wrestler_ids(); ensure_selector_css()
+ st.markdown('<div class="pic-mgr-panel">',unsafe_allow_html=True)
+ fc1,fc2,fc3,fc4=st.columns([1.1,1.4,1.2,1])
+ with fc1: brand=st.selectbox('Brand filter',['NXT','SmackDown','WCW','All'],key='pic_gal_brand')
+ with fc2: search=st.text_input('Search wrestler name','',key='pic_gal_search',placeholder='CM, Rose, Punk…')
+ with fc3: sort_mode=st.selectbox('Sort',['A–Z','Champions first','Missing image first','Recently updated'],key='pic_gal_sort')
+ with fc4: per=st.selectbox('Per page',[25,50,10],index=0,key='pic_gal_per')
+ filt_sig=f'{brand}|{search}|{sort_mode}|{per}'
+ if st.session_state.get('pic_gal_filt')!=filt_sig:
+  st.session_state.pic_gal_pg=1
+  st.session_state.pic_gal_filt=filt_sig
+ pool,champs=_pic_mgr_wrestler_pool(brand,search,sort_mode)
+ pages=max(1,(len(pool)+per-1)//per)
+ cur_pg=int(st.session_state.get('pic_gal_pg',1))
+ if cur_pg>pages: cur_pg=1; st.session_state.pic_gal_pg=1
+ nav1,nav2,nav3,nav4=st.columns([1.3,.2,.2,.5])
+ with nav1: st.caption(f'**{len(pool)}** wrestlers · page **{cur_pg}/{pages}** · saves use **wrestler_id** (name changes safe)')
+ with nav2:
+  if st.button('◀ Prev',key='pic_gal_prev',disabled=cur_pg<=1): st.session_state.pic_gal_pg=max(1,cur_pg-1); st.rerun()
+ with nav3:
+  if st.button('Next ▶',key='pic_gal_next',disabled=cur_pg>=pages): st.session_state.pic_gal_pg=min(pages,cur_pg+1); st.rerun()
+ with nav4: pg=st.number_input('Page',1,pages,cur_pg,key='pic_gal_pg',label_visibility='collapsed')
+ slice_pool=pool[(int(pg)-1)*per:int(pg)*per]
+ if not slice_pool:
+  st.info('No wrestlers match — clear search or change brand filter.')
+  st.markdown('</div>',unsafe_allow_html=True)
+  return
+ st.markdown('<div class="pic-mgr-scroll">',unsafe_allow_html=True)
+ for w in slice_pool:
+  wid=w.get('wrestler_id','')
+  nm=w.get('name','')
+  comp=w.get('company','')
+  with st.container(border=True):
+   r1,r2,r3=st.columns([.18,.42,.4])
+   with r1: show_wrestler_portrait(w=w,width=88)
+   with r2:
+    champ_badge=' 🏆' if nm in champs else ''
+    st.markdown(f"**{nm}**{champ_badge}")
+    st.caption(f"{comp} · `{wid}` · {'✅ image' if wrestler_has_image(w) else '⬜ no image'}")
+   with r3:
+    f=st.file_uploader('Upload image',type=['png','jpg','jpeg','webp'],key=f'pic_gal_up_{wid}')
+    url=st.text_input('Image URL',key=f'pic_gal_url_{wid}',placeholder='https://…')
+    b1,b2,b3=st.columns(3)
+    if b1.button('Save',key=f'pic_gal_save_{wid}',type='primary'):
+     ok,msg=save_picture_asset('wrestler',comp,nm,f=f,url=url,wrestler_id=wid)
+     if ok:
+      n=persist_picture_to_all_sessions(comp)
+      st.success(f'{msg} · synced to {n} wrestler slot(s) across all sessions.')
+      st.rerun()
+     else: st.error(msg)
+    if b2.button('Remove',key=f'pic_gal_rm_{wid}'):
+     if remove_wrestler_image_file(w): touch_universe_meta(comp); save_universe(); st.toast(f'Removed image for {nm}'); st.rerun()
+     else: st.warning('No image file to remove.')
+ st.markdown('</div></div>',unsafe_allow_html=True)
+
+def render_bulk_picture_import_panel():
+ """Upload many wrestler portraits at once — matched by filename."""
+ ensure_wrestler_ids()
+ reg=pic_sync._load_registry()
+ n_reg=len(reg.get('wrestlers',{}))
+ n_disk=len([p for p in Path('assets/wrestlers').glob('*') if p.is_file() and p.suffix.lower() in ('.png','.jpg','.jpeg','.webp')])
+ pool=[w for w in st.session_state.roster if isinstance(w,dict)]
+ n_have=sum(1 for w in pool if wrestler_has_image(w))
+ with bfg_card('Import ALL wrestler pictures (bulk)'):
+  st.markdown(
+   f'**{n_have}/{len(pool)}** wrestlers have images · **{n_reg}** in shared registry · **{n_disk}** files in `assets/wrestlers/`'
+  )
+  st.caption(
+   'Name files after the wrestler: `cm_punk.png`, `roman_reigns.jpg`, or `W-cm_punk-nxt.png`. '
+   'Upload **many images** or one **.zip** folder, then import. Use **Fix all pictures now** if images vanished after restart.'
+  )
+  bulk_files=st.file_uploader(
+   'Select wrestler images or a .zip of images',
+   type=['png','jpg','jpeg','webp','zip'],
+   accept_multiple_files=True,
+   key='pic_bulk_files',
+  )
+  b0,b1,b2,b3=st.columns(4)
+  if b0.button('Fix all pictures now',type='primary',key='pic_bulk_repair'):
+   stats,n=repair_and_sync_all_pictures()
+   st.success(f"Linked **{stats.get('linked_count',0)}** portraits · registry **{stats.get('registry_count',0)}** · synced **{n}** slots across all sessions.")
+   st.rerun()
+  if b1.button('Import all & sync',key='pic_bulk_import',disabled=not bulk_files):
+   result=pic_sync.bulk_import_wrestler_images(bulk_files,st.session_state.roster)
+   n_pic=persist_picture_to_all_sessions('NXT')
+   if result['count']:
+    st.success(f"Imported **{result['count']}** portraits · synced **{n_pic}** slots across all sessions.")
+   else:
+    st.warning('No files matched a wrestler — check filenames (example: `raven.png`, `christian_rose.png`).')
+   if result['unmatched']:
+    st.caption('Unmatched files: ' + ', '.join(result['unmatched'][:20]) + ('…' if len(result['unmatched'])>20 else ''))
+   if result['errors']:
+    for err in result['errors'][:8]: st.error(err)
+   if result['count']: st.rerun()
+  if b2.button('Rescan assets folder',key='pic_bulk_rescan'):
+   pic_sync.scan_assets_into_registry(st.session_state.roster)
+   n=persist_picture_to_all_sessions('NXT')
+   st.success(f'Rescanned disk → synced {n} portrait slot(s).')
+   st.rerun()
+  if b3.button('Show missing only',key='pic_bulk_missing'):
+   st.session_state.pic_gal_sort='Missing image first'
+   st.session_state.pic_gal_brand='All'
+   st.session_state.pic_gal_pg=1
+   st.rerun()
+  with st.expander('Filename examples that work'):
+   for w in pool[:12]:
+    wid=w.get('wrestler_id','')
+    st.code(f"{slug(w.get('name',''))}.png  —  {w.get('name')}  (or {wid}.png)")
+
+def render_picture_manager_page():
+ render_page_shell('Picture Manager',subtitle='Bulk-import all wrestler portraits, or upload one at a time in the gallery.',show_meter=False)
+ ensure_selector_css()
+ for folder in picture_folder_map().values(): Path(folder).mkdir(parents=True,exist_ok=True)
+ render_bulk_picture_import_panel()
+ tab_gal,tab_other=st.tabs(['Wrestler Gallery (scroll + search)','Logos · Owners · Belts · Staff'])
+ with tab_gal:
+  render_picture_manager_wrestler_gallery()
+ with tab_other:
+  kind=st.selectbox('Image type',['owner','gm','commentator','podcast host','logo','banner','championship belt','wrestler (quick pick)'],key='pic_kind')
+  pic_comp=None; target=None; wid=None
+  if kind in ('logo','banner'):
+   pic_comp=st.selectbox('Company',PLAYABLE,key='pic_co'); target=pic_comp
+  elif kind=='championship belt':
+   pic_comp=brand_tabs('Company',key='picbeltco')
+   target=st.selectbox('Championship title',COMPANIES[pic_comp]['titles'],key=f'pic_belt_title_{pic_comp}')
+   st.caption(f'Saves as: assets/belts/{belt_file_slug(pic_comp,target)}.png')
+  elif kind=='owner':
+   pic_comp=brand_tabs('Company',key='picbrand_owner')
+   choices=company_owner_photo_names(pic_comp)
+   if not choices: choices=[COMPANIES[pic_comp].get('owner','Owner')]
+   target=st.selectbox('Owner',choices,key=f'pic_owner_person_{pic_comp}')
+   st.caption(f'Saves as: assets/owners/{slug(target)}.png')
+  elif kind=='gm':
+   pic_comp=brand_tabs('Company',key='picbrand_gm')
+   prof=st.session_state.company_profiles.setdefault(pic_comp,dict(COMPANY_PROFILES[pic_comp]))
+   target=(prof.get('gm') or COMPANIES[pic_comp]['gm'] or '').strip()
+   st.text_input('GM',value=target,disabled=True,key=f'pic_gm_person_{pic_comp}')
+   st.caption(f'Saves as: assets/gm/{slug(target)}.png' if target else 'Set GM name on Company Home first.')
+  else:
+   pic_comp=brand_tabs('Company',key='picbrand2')
+   if kind=='wrestler (quick pick)':
+    ensure_wrestler_ids()
+    pool=[]
+    for c in PLAYABLE: pool.extend(clean_name_pool(c,'All'))
+    pool=sorted(set(pool),key=str.lower)
+    target=clean_name_selector('Wrestler / tag team',f'pic_wrest_{pic_comp}',options=pool,company=pic_comp,company_filter=False,type_filter=False,default_company=pic_comp or 'NXT',show_search=True,label_search='Search wrestler or tag team')
+    fw=find(target); wid=fw.get('wrestler_id') if fw else None
+   elif kind=='podcast host':
+    ensure_nxt_unfiltered_hosts()
+    target=st.selectbox('Podcast Host',opts_podcast_hosts('NXT'),key='pic_ph')
+   else:
+    target=clean_name_selector('Staff',f'pic_staff_{pic_comp}',company=pic_comp,entity_type='Staff',default_company=pic_comp,company_filter=False,type_filter=False)
+  with st.container(border=True):
+   st.caption('Preview & upload')
+   if kind=='championship belt':
+    show_belt_img(pic_comp,target,150)
+   elif kind in ('logo','banner'):
+    show_entity_img(pic_comp,kind,140)
+   else:
+    img_kind='podcast_host' if kind=='podcast host' else (kind.replace(' (quick pick)','') if 'wrestler' in kind else kind)
+    show_entity_img(target,img_kind,140)
+   f=st.file_uploader('Upload image (png/jpg/jpeg/webp)',type=['png','jpg','jpeg','webp'],key=f'pic_upload_{pic_comp}_{kind}')
+   url=st.text_input('Optional image URL','',key=f'pic_url_{pic_comp}_{kind}')
+   if st.button('Save Picture',key=f'pic_save_{pic_comp}_{kind}',type='primary'):
+    skind='wrestler' if 'wrestler' in kind else kind
+    if skind in ('owner','gm','wrestler','commentator','podcast host') and not (target or '').strip():
+     st.error('Select a person before saving.')
+    elif kind=='championship belt' and not target:
+     st.error('Select a championship title before saving.')
+    else:
+     ok,msg=save_picture_asset(skind,pic_comp,target,f=f,url=url,wrestler_id=wid)
+     if ok:
+      n=persist_picture_to_all_sessions(pic_comp) if skind=='wrestler' else 0
+      note=f' · synced to all sessions ({n} portraits)' if n else ''
+      st.success(f'{msg}{note}'); st.rerun()
+     else: st.error(msg)
+  with bfg_card('Belt filename reference'):
+   for comp in PLAYABLE:
+    st.caption(f"**{comp}** — "+', '.join(belt_file_slug(comp,t) for t in COMPANIES[comp]['titles']))
 
 def render_company_home_photo_panel(comp,can_edit):
  owner_choices=company_owner_photo_names(comp)
@@ -6604,7 +8357,9 @@ def render_company_home_photo_panel(comp,can_edit):
     for m in msgs:
      if 'saved' in m.lower() or 'downloaded' in m.lower(): st.success(m)
      else: st.error(m)
-    if ok_any: st.rerun()
+    if ok_any:
+     persist_picture_to_all_sessions(comp)
+     st.rerun()
 
 def render_champion_card(comp,title):
  st.session_state.champions.setdefault(comp,{})
@@ -6662,16 +8417,34 @@ def render_champion_card(comp,title):
   rw=reign_weeks(meta)
   st.markdown(f"<div class='champ-reign-line'>Weeks as champion: <b>{rw}</b> · Successful defenses: <b>{meta.get('defenses',0)}</b> · Last title defense: <b>{meta.get('last_defense_show') or 'None yet'}</b></div>",unsafe_allow_html=True)
  with st.expander('Edit Champion',expanded=False):
+  if not can_edit_company(comp):
+   st.caption('Read-only — you do not have edit access for this brand.')
   pool=champion_pick_pool(comp,title)
-  cur_pick=cur if not is_vacant_champion(cur) else 'Vacant'
-  sel=clean_name_selector('Select Champion',f'champ_sel_{tk}',options=pool,current=cur_pick,preserve_order=True,label_search='Search Champion',show_search=True)
-  if st.button('Save Champion',key=f'champ_save_{tk}'):
-   new_h='Vacant' if sel in ('Vacant','Place Holder') else sel
-   if set_champion(comp,title,new_h,cur):
-    st.toast(f'{new_h if new_h!="Vacant" else "Vacancy"} — {title} updated.')
-    st.success(f'{sel} is now {comp} {title} champion.' if sel not in ('Vacant','Place Holder') else f'{title} is now vacant.')
-   else: st.info('No change.')
-   st.rerun()
+  cur_pick=cur if cur in pool else ('Vacant' if is_vacant_champion(cur) else cur)
+  if cur_pick not in pool: pool=[cur_pick]+[x for x in pool if x!=cur_pick]
+  pick_key=f'champ_sel_{tk}'
+  if pick_key not in st.session_state or st.session_state[pick_key] not in pool:
+   st.session_state[pick_key]=cur_pick if cur_pick in pool else pool[0]
+  sel=st.selectbox('Select Champion',pool,key=pick_key)
+  st.caption('Pick a wrestler, then click **Save Champion**. Browsing the list alone does not save.')
+  flash_key=f'champ_flash_{tk}'
+  if st.session_state.pop(flash_key,None):
+   st.success(st.session_state.pop(f'{flash_key}_msg','Champion saved.'))
+  if st.button('Save Champion',key=f'champ_save_{tk}',type='primary',disabled=not can_edit_company(comp),use_container_width=True):
+   picked=st.session_state.get(pick_key,sel)
+   new_h='Vacant' if picked in ('Vacant','Place Holder') else picked
+   old_h=st.session_state.champions.get(comp,{}).get(title,cur)
+   ok,msg=persist_champion_selection(comp,title,new_h,old_h)
+   if ok:
+    st.session_state[flash_key]=True
+    label=new_h if not is_vacant_champion(new_h) else 'Vacant'
+    st.session_state[f'{flash_key}_msg']=f'**{label}** is now {comp} {display_title(title)} champion — saved to disk.'
+    st.session_state[pick_key]=picked if picked in pool else new_h
+    st.rerun()
+   elif msg=='no_change':
+    st.info('No change — pick a different champion first.')
+   else:
+    st.error(f'Champion save failed: {msg}')
  with st.expander('Champion History',expanded=False):
   hist=[h for h in st.session_state.champion_history if h.get('company')==comp and h.get('title')==title]
   if not hist: st.caption('No reign history recorded yet.')
@@ -8364,32 +10137,35 @@ def ensure_data_dirs():
   Path(folder).mkdir(parents=True,exist_ok=True)
  purge_invalid_asset_files()
 
-def init():
+def init(light=False):
  ensure_data_dirs()
- if 'roster' not in st.session_state:
-  st.session_state.roster=[dict(w) for w in ROSTER if w['name'] not in REMOVED_WRESTLERS|REMOVED_TAG_TEAMS]
- defaults={'champions':json.loads(json.dumps(CHAMPIONS)),'title_prestige':{},'champion_meta':{},'champion_history':[],'title_defense_history':[],'bank':STARTING_BUDGET*3,'week':0,'month':1,'year':1,'weekly_history':[],'twitter_posts':[],'schedule_calendar':[],'calendar_locked':False,'calendar_ai_notes':[],'cal_lock_confirm':False,'cal_reset_confirm':False,'random_event_history':[],'news_feed':[],'power_rankings':[],'previous_power_rankings':[],'power_ranking_history':[],'character_bible':json.loads(json.dumps(CHARACTER_BIBLE)),'yearly_attractions':json.loads(json.dumps(ATTRACTIONS))[:6],'attractions_locked':False,'attraction_year':1,'attraction_history':[],'last_profit_loss':0,'last_money_generated':0,'last_money_lost':0,'last_transportation_cost':0,'last_medical_cost':0,'last_ad_money':0,'last_pledge_money':0,'last_hotel_cost':0,'last_hotel_savings':0,'last_transport_savings':0,'saved_show':None,'booking_mode':'Match Card Mode','ai_booked_show':False,'show_user_edited':False,'long_story_draft':'','book_show_drafts':{},'book_show_archive':{},'last_story_analysis':None,'departed':[],'rivalries':[],'test_event_preview':None,'company_budgets':{c:STARTING_BUDGET for c in PLAYABLE},'company_finance':{},'finance_ledger':[],'show_finance_reports':[],'factions':{'NXT':[],'SmackDown':[],'WCW':WCW_FACTIONS},'custom_tag_teams':{},'breakup_history':[],'former_tag_teams':{c:[] for c in PLAYABLE},'film_projects':[],'logistics_reports':[],'cameo_library':[],'last_cameo':None,'team_profiles':{},'debut_history':[],'debut_warnings':[],'rankings_include_not_debuted':False,'confirmed_story_debuts':[],'free_agency_pool':[],'negotiation_history':[],'contract_warnings':[],'exclusive_activity_history':[],'exclusive_generated_ideas':[],'exclusive_violations':[],'nxt_unfiltered_hosts':json.loads(json.dumps(_default_nxt_unfiltered_hosts())),'nxt_unfiltered_episodes':[],'nxt_unfiltered_draft':{},'last_nxt_unfiltered':None,'podcast_hosts_booking_enabled':False,'week_progress':default_week_progress(),'player_assignments':{c:'' for c in PLAYABLE}, 'pending_trades':[],'logged_in':False,'session_id':'','game_name':'','invite_code':'','nxt_uf_voice_mode':'free_edge','nxt_uf_premium_cost_ok':False,'money_meter_flash':[],'finance_opening_applied':False,'weekly_performance_index':{},'company_crisis':{c:crisis.default_crisis_rec() for c in PLAYABLE},'bidding_wars':[],'brand_loyalty_history':[],'descriptor_recent':[], 'twitter_recruitment_history':[],'twitter_manual_gm_response':False,'storylines':[],'sponsor_objectives':[],'wrestler_name_history':[],'gate_screen':'intro'}
+ if not light and 'roster' not in st.session_state:
+  apply_merged_roster([])
+ defaults={'rosters':{},'champions':json.loads(json.dumps(CHAMPIONS)),'title_prestige':{},'champion_meta':{},'champion_history':[],'title_defense_history':[],'bank':STARTING_BUDGET*3,'week':0,'month':1,'year':1,'weekly_history':[],'twitter_posts':[],'schedule_calendar':[],'calendar_locked':False,'calendar_ai_notes':[],'cal_lock_confirm':False,'cal_reset_confirm':False,'random_event_history':[],'news_feed':[],'power_rankings':[],'previous_power_rankings':[],'power_ranking_history':[],'character_bible':json.loads(json.dumps(CHARACTER_BIBLE)),'yearly_attractions':json.loads(json.dumps(ATTRACTIONS))[:6],'attractions_locked':False,'attraction_year':1,'attraction_history':[],'last_profit_loss':0,'last_money_generated':0,'last_money_lost':0,'last_transportation_cost':0,'last_medical_cost':0,'last_ad_money':0,'last_pledge_money':0,'last_hotel_cost':0,'last_hotel_savings':0,'last_transport_savings':0,'saved_show':None,'booking_mode':'Match Card Mode','ai_booked_show':False,'show_user_edited':False,'long_story_draft':'','book_show_drafts':{},'book_show_archive':{},'last_story_analysis':None,'departed':[],'rivalries':[],'test_event_preview':None,'company_budgets':{c:STARTING_BUDGET for c in PLAYABLE},'company_finance':{},'finance_ledger':[],'show_finance_reports':[],'factions':{'NXT':[],'SmackDown':[],'WCW':WCW_FACTIONS},'custom_tag_teams':{},'breakup_history':[],'former_tag_teams':{c:[] for c in PLAYABLE},'film_projects':[],'logistics_reports':[],'cameo_library':[],'last_cameo':None,'team_profiles':{},'debut_history':[],'debut_warnings':[],'rankings_include_not_debuted':False,'confirmed_story_debuts':[],'free_agency_pool':[],'negotiation_history':[],'contract_warnings':[],'exclusive_activity_history':[],'exclusive_generated_ideas':[],'exclusive_violations':[],'nxt_unfiltered_hosts':json.loads(json.dumps(_default_nxt_unfiltered_hosts())),'nxt_unfiltered_episodes':[],'nxt_unfiltered_draft':{},'last_nxt_unfiltered':None,'podcast_hosts_booking_enabled':False,'week_progress':default_week_progress(),'player_assignments':{c:'' for c in PLAYABLE}, 'pending_trades':[],'logged_in':False,'session_id':'','game_name':'','invite_code':'','nxt_uf_voice_mode':'free_edge','nxt_uf_premium_cost_ok':False,'money_meter_flash':[],'finance_opening_applied':False,'weekly_performance_index':{},'company_crisis':{c:crisis.default_crisis_rec() for c in PLAYABLE},'bidding_wars':[],'brand_loyalty_history':[],'descriptor_recent':[], 'twitter_recruitment_history':[],'twitter_manual_gm_response':False,'storylines':[],'sponsor_objectives':[],'wrestler_name_history':[],'wrestler_image_meta':{},'gate_screen':'intro','gm_trust_adj':{c:0 for c in PLAYABLE},'locker_chem_adj':{c:0 for c in PLAYABLE},'dirt_sheet_adj':{c:0 for c in PLAYABLE},'gm_owner_goal_status':{},'media_question_log':[],'trade_block':[],'calendar_approval_results':{},'dirt_sheet_names':{},'dev_focus':{}}
  for k,v in defaults.items():
   if k not in st.session_state: st.session_state[k]=v
- ensure_wrestler_ids()
- if not st.session_state.power_rankings: update_rank()
+ if not light:
+  ensure_wrestler_ids()
+  if not st.session_state.power_rankings: update_rank()
 
 def main():
  register_ui_page_helpers()
- init()
- ensure_ai_mode_prefs()
- ensure_extended_state()
- ensure_multiplayer_state()
- if st.session_state.get('logged_in') and not st.session_state.get('_universe_loaded'):
-  try:
-   load_universe_from_disk()
-  except Exception as ex:
-   st.error(f'Could not load saved universe: {ex}')
-   st.session_state._universe_loaded=True
- storylines.ensure_storyline_state()
- sponsor_obj.ensure_sponsor_objectives(COMPANIES)
- autosave.ensure_autosave_state()
+ pending_name=st.session_state.pop('_pending_quick_name','Joshua')
+ pending_inv=st.session_state.pop('_pending_quick_login',None)
+ pending_sid=st.session_state.pop('_pending_continue_sid',None)
+ pending_join=st.session_state.pop('_pending_join_codes',None)
+ if pending_join:
+  _execute_join_with_codes(*pending_join)
+ if pending_inv:
+  _execute_quick_login(pending_inv,pending_name)
+ if pending_sid:
+  _execute_continue_sid(pending_sid,pending_name)
  if not st.session_state.get('logged_in'):
+  init(light=True)
+  ensure_ai_mode_prefs()
+  try_auto_login()
+  if st.session_state.get('_login_error'):
+   st.error(st.session_state._login_error)
   gate=st.session_state.get('gate_screen','intro')
   if gate=='tutorial':
    ui_pages.render_tutorial_page()
@@ -8400,15 +10176,47 @@ def main():
   if gate=='login':
    render_login_screen()
    st.stop()
-  ui_pages.render_game_intro()
-  st.stop()
+  if not st.session_state.get('logged_in'):
+   ui_pages.render_game_intro()
+   st.stop()
+ init(light=False)
+ ensure_ai_mode_prefs()
+ ensure_extended_state()
+ ensure_multiplayer_state()
+ if not st.session_state.get('_universe_loaded'):
+  should_load=st.session_state.get('logged_in') or session_universe_file().exists()
+  if should_load:
+   with st.spinner('Loading your universe…'):
+    try:
+     load_universe_from_disk()
+    except Exception as ex:
+     st.session_state._load_warning=f'Could not load full save: {ex}'
+   st.session_state._universe_loaded=True
+ storylines.ensure_storyline_state()
+ sponsor_obj.ensure_sponsor_objectives(COMPANIES)
+ autosave.ensure_autosave_state()
  render_title_bar()
+ if st.session_state.get('_load_warning'):
+  st.warning(st.session_state._load_warning)
  render_finance_bar()
  nav=render_sidebar()
  inject_brand_theme()
  return nav
 
+def register_gm_mode_helpers():
+ if not gm_mode: return
+ gm_mode.register_helpers(
+  bfg_card=bfg_card,
+  make_twitter_post=make_twitter_post,
+  money=money,
+  roster=roster,
+  find=find,
+  save_universe=save_universe,
+  render_page_shell=render_page_shell,
+ )
+
 def register_ui_page_helpers():
+ register_gm_mode_helpers()
  ui_pages.register_helpers(
   database_url_configured=database_configured,
   supabase_cloud_active=supabase_cloud_active,
@@ -8431,16 +10239,99 @@ def register_ui_page_helpers():
   try_advance_shared_week_after_show=try_advance_shared_week_after_show,
   force_advance_shared_week=force_advance_shared_week,
   admin_unlock_company_week=admin_unlock_company_week,
+  roster=roster,
+  find=find,
+  clean_name_selector=clean_name_selector,
+  ai=ai,
+  add_transaction=add_transaction,
+  apply_wrestler_deltas=apply_wrestler_deltas,
+  make_twitter_post=make_twitter_post,
+  openai_key_available=openai_key_available,
+  render_openai_key_helper=render_openai_key_helper,
+  quick_enter_session=quick_enter_session,
+  request_quick_login=request_quick_login,
+  request_continue_session=request_continue_session,
+  list_saved_sessions=mp.list_saved_sessions,
+  request_join_with_codes=request_join_with_codes,
+  lookup_invite_session=mp.lookup_invite_session,
  )
 
-register_ui_page_helpers()
-page=main()
+def brandwar_story_grade(story,etype,featured,top_rivalry,comp):
+ """Brand War GM rule-based story grader — keyword scoring with Character Bible + champion checks."""
+ text=(story or '').lower(); score=0; notes=[]
+ groups=[('Story structure',20,['opening','main event','closing','backstage','promo','match','segment'],3),('Rivalry heat',20,['attack','betray','brawl','threat','challenge','blood','screw','revenge','heated','personal'],3),('Shock moment',10,['return','debut','turn','heel turn','face turn','walkout','injury','contract','interference','screwjob'],3),('Business value',15,['sponsor','commercial','movie','viral','merch','champion','title','ple','world cup','wembley'],3)]
+ for label,cap,terms,mult in groups:
+  pts=min(cap,sum(text.count(t) for t in terms)*mult); score+=pts; notes.append(f'{label}: {pts}/{cap}')
+ champs=[c for c in st.session_state.get('champions',{}).get(comp,{}).values() if c and c!='Vacant' and c!='Place Holder' and not str(c).startswith('TBD')]
+ champ_hits=sum(1 for c in champs if str(c).lower() in text)
+ star_pts=min(15,champ_hits*4+(5 if featured and featured.lower() in text else 0)); score+=star_pts; notes.append(f'Champion/star usage: {star_pts}/15')
+ bible=st.session_state.get('character_bible',{})
+ if featured in bible:
+  b=bible[featured]
+  do=sum(1 for k in b.get('should_do',[]) if k and str(k).lower() in text)
+  bad=sum(1 for k in b.get('should_not',[]) if k and str(k).lower() in text)
+  pts=max(0,min(10,4+do*2-bad*3)); notes.append(f'Character consistency for {featured}: {pts}/10 — {b.get("archetype","Custom")}')
+ else:
+  pts=7; notes.append('Character consistency: 7/10 — no detailed bible profile yet (add one in Character Editor).')
+ score+=pts
+ if etype=='Go-home before PLE' and any(t in text for t in ['ple','main event','war','final','contract signing']):
+  score+=5; notes.append('Episode purpose bonus: +5')
+ if top_rivalry and top_rivalry.lower() in text: notes.append(f'Top rivalry mentioned: {top_rivalry}. Heat should rise.')
+ else: notes.append('Top rivalry was not clearly highlighted.')
+ final=max(1,min(10,score/10)); grade='A+' if final>=9 else 'A' if final>=8 else 'B' if final>=7 else 'C' if final>=6 else 'D' if final>=5 else 'Disaster'
+ notes.append(f'Suggested rule: use {round(final)}/10 as the weekly rating or apply it manually on the Dashboard.')
+ return final,grade,notes
+
+def brandwar_ai_grade_prompt(story,etype,featured,top_rivalry,comp):
+ champs='\n'.join(f'{t}: {c}' for t,c in st.session_state.get('champions',{}).get(comp,{}).items())
+ rows=[]
+ for w in roster(comp)[:60]:
+  if is_tag_team_entry(w): continue
+  rows.append(f"{w['name']} | {align(w.get('alignment','N'))} | OVR {w.get('overall',0)} | Momentum {w.get('momentum',50)} | Morale {w.get('morale',50)}")
+ bible_lines=[]
+ for name,b in list(st.session_state.get('character_bible',{}).items())[:40]:
+  bible_lines.append(f"{name}: {b.get('archetype','Custom')}. Do: {', '.join(b.get('should_do',[]))}. Do not: {', '.join(b.get('should_not',[]))}.")
+ recent='\n'.join(f"Week {h.get('week','?')}: {h.get('show_name',h.get('company',''))} rated {h.get('episode_rating',h.get('final_rating','?'))}" for h in st.session_state.get('weekly_history',[]) if h.get('company')==comp)[-1200:]
+ return f"""You are the creative judge for the fictional Bound For Glory universe ({comp} brand). Judge by this universe's Character Bible, not real WWE/AEW personas.
+
+EPISODE TYPE: {etype}
+FEATURED STAR: {featured}
+TOP RIVALRY: {top_rivalry}
+
+RECENT SHOWS:
+{recent or 'No prior shows.'}
+
+CURRENT {comp} CHAMPIONS:
+{champs or 'None recorded.'}
+
+ROSTER CONTEXT:
+{chr(10).join(rows)}
+
+CHARACTER BIBLE:
+{chr(10).join(bible_lines) or 'No bible entries.'}
+
+Grade strictly but constructively. Weights: story progression 20%, rivalry heat 20%, champion/star usage 15%, structure/pacing 15%, character consistency 15%, shock moments 5%, business value 10%.
+Respond in markdown with: **Final Grade** (letter + score/10), **Suggested Show Rating**, **Strengths**, **Weaknesses**, **Character Notes**, **Rivalry Heat Changes**, **Sponsor Reaction**, **Booking Suggestions**, **Next Week Hooks**.
+
+EPISODE STORY TO GRADE:
+{story}"""
+
+try:
+ register_ui_page_helpers()
+ page=main()
+except Exception as _startup_ex:
+ st.error('Bound For Glory failed to start. If you recently edited Streamlit **Secrets**, remove invalid `SUPABASE_URL` / `SUPABASE_KEY` placeholder values and redeploy.')
+ st.exception(_startup_ex)
+ st.stop()
+ page=None
 # Theme already applied in main() after sidebar; refresh if page brand tabs change active_brand later
 if st.session_state.get('active_brand') in PLAYABLE:
  inject_brand_theme()
 
 if page=='Dashboard':
  render_page_shell('Dashboard',subtitle='Universe overview — NXT · SmackDown · WCW share one week and separate $150M banks.',show_meter=True)
+ if gm_mode:
+  gm_mode.render_weekly_pulse(st.session_state.get('active_brand','NXT'))
  col_left,col_right=st.columns(2)
  with col_left:
   with bfg_card('Company Overview'):
@@ -8496,6 +10387,12 @@ elif page=='Season Awards':
 elif page=='Free Agency':
  render_page_shell('Free Agency',subtitle='Sign free agents to your brand — offers and bidding.',show_meter=False)
  ensure_contract_fields(); ensure_finance_state()
+ if gm_mode:
+  _fab=gm_mode.fa_interest_rows()
+  if _fab:
+   with st.expander(f'📋 FA Interest Board ({len(_fab)} scouted) — full board in GM Hub',expanded=False):
+    for _r in _fab[:8]:
+     st.write(f"• **{_r['wrestler']}** — prefers **{_r['preferred']}** · demand {money(_r['money_demand'])} · _{_r['prediction']}_")
  st.subheader('Free Agency Pool')
  fa=[find(x['name']) for x in st.session_state.free_agency_pool if find(x['name'])]
  fa+=[w for w in st.session_state.roster if w.get('company')=='Free Agency' and w not in fa]
@@ -8515,6 +10412,9 @@ elif page=='Free Agency':
     else: st.error(msg)
 elif page=='Weekly Performance':
  render_weekly_performance_page()
+elif page=='GM Hub':
+ if gm_mode: gm_mode.render_gm_hub()
+ else: st.error('GM Hub module missing — redeploy with bfg_gm_mode.py.')
 elif page=='Company Home':
  comp=render_page_shell('Company Home',subtitle='Brand profile, lore, champions snapshot, and exclusive lanes.',use_brand_tabs=True,tabs_label='Company',show_meter=True)
  can_edit=can_edit_company(comp)
@@ -8607,7 +10507,10 @@ elif page=='Twitter':
  for i,pr in enumerate(TWEET_PRESETS[:6]):
   if pr_cols[i].button(pr[0][:24],key=f'tw_pre_{i}',use_container_width=True):
    queue_tw_compose_opts(pr[1],pr[2],pr[3]); st.rerun()
- tab_timeline,tab_create,tab_recruit,tab_threads,tab_buzz,tab_waves=st.tabs(['Timeline','Create Post','Recruit / Tamper','Threads & Replies','Buzz & Heat','Auto Waves'])
+ tab_timeline,tab_create,tab_recruit,tab_threads,tab_buzz,tab_waves,tab_dirt=st.tabs(['Timeline','Create Post','Recruit / Tamper','Threads & Replies','Buzz & Heat','Auto Waves','📰 Dirt Sheet'])
+ with tab_dirt:
+  if gm_mode: gm_mode.render_dirt_sheet_tab(comp)
+  else: st.info('Dirt sheet module not loaded.')
  tw_mode_map={'generate original tweet':'original','generate reply':'reply','generate quote tweet':'quote','generate owner/GM response':'original','generate commentator reaction':'reply'}
  with tab_timeline:
   st.caption('Live feed — filter, search, and read the timeline without scrolling past compose controls.')
@@ -8863,7 +10766,7 @@ elif page=='Twitter':
    ctopic=st.selectbox('Topic',['Controversy','Card Complaint','Creative Complaint','Political/Controversy'],key='tw_contro_topic')
    ctone=st.selectbox('Tone',['angry','savage','cryptic','petty','political','emotional'],key='tw_contro_tone')
    ctyp=st.selectbox('Type',['Angry Tweet','Cryptic Tweet','Locker Room Drama Tweet','Creative Complaint Tweet'],key='tw_contro_typ')
-   cmention=clean_name_selector('Call out','tw_contro_mention',options=['']+opts_twitter_wrestlers(comp),current='',show_search=True)
+   cmention=clean_name_selector('Call out','tw_contro_mention',options=opts_twitter_wrestlers(comp),current='',extra_options=[''],show_search=True)
    bw1,bw2=st.columns(2)
    if bw1.button('One hot tweet',type='primary',key='tw_contro_one',disabled=not tw_edit or not cw):
     eff=compute_tweet_effects(ctopic,ctone,cw,comp,cmention)
@@ -8952,60 +10855,38 @@ elif page=='Twitter':
    if st.checkbox('Yes, delete all Twitter posts',key='tw_clear_yes') and st.button('Delete all posts',key='tw_clear_do'):
     st.session_state.twitter_posts=[]; st.session_state.tw_clear_confirm=False; st.rerun()
 elif page=='Schedule Calendar':
- render_page_shell('Schedule Calendar',subtitle='Year schedule, PLE anchors, travel warnings, and AI schedule analysis.',use_brand_tabs=True,tabs_label='Brand',show_meter=True)
+ render_page_shell('Schedule Calendar',subtitle='Pick a month and week, enter your show, save. Auto-saves as you go.',use_brand_tabs=True,tabs_label='Brand',show_meter=True)
  migrate_schedule_calendar()
  locked=st.session_state.get('calendar_locked',False)
  h1,h2=st.columns([.75,.25])
  with h1:
-  st.markdown('Build the full **52-week** schedule per company (weekly shows, PLEs, tours, crossovers). Lock when ready — Book Show will follow it week-by-week.')
+  st.markdown('Pick a **month** and **week**, enter the show details, and hit **Save**. Use optional expanders for venues, PLE presets, or locking the year.')
  with h2:
   render_schedule_lock_badge(); st.caption('Status: **LOCKED**' if locked else 'Status: **UNLOCKED**')
- if locked: st.error('Full year schedule is LOCKED. Reset to edit dates, venues, cities, or show types.')
+ if locked: st.info('Schedule locked — open **Lock & reset** at the bottom of Plan Schedule to unlock.')
  tab_plan,tab_table,tab_ai=st.tabs(['Plan Schedule','Year Schedule Table','AI Schedule Analysis'])
  with tab_plan:
   cal_ex=brand_tabs('Calendar brand',key='cal_ex_brand')
   render_brand_exclusives_section(cal_ex,'cal_ex',compact=True)
-  if not locked:
-   with st.expander('Add / Edit Calendar Entry',expanded=True):
-    cal_comp=cal_ex
-    month=st.selectbox('Month',CALENDAR_MONTHS,key='cal_month')
-    week=st.number_input('Week Number',1,52,next_bookable_week(),key='cal_week')
-    show_date=st.date_input('Date',date.today(),key='cal_date')
-    show_name=st.text_input('Show Name',f'{cal_comp} Week {week}',key='cal_sname')
-    stype=st.selectbox('Show Type',CALENDAR_SHOW_TYPES,key='cal_stype')
-    venue=venue_selector('cal')
-    cap=st.number_input('Venue Capacity',1000,150000,int(venue.get('capacity',15000)),key='cal_cap')
-    venue['capacity']=int(cap)
-    ticket_px=st.number_input('Ticket price',15,500,65,key='cal_ticket')
-    cal_status=st.selectbox('Status',CALENDAR_STATUSES,index=0,key='cal_status')
-    travel_req=st.checkbox('Travel required',key='cal_travel')
-    hotel_req=st.checkbox('Hotel required',key='cal_hotel')
-    transport_req=st.checkbox('Transportation required',key='cal_transport')
-    hometown=clean_name_multiselect('Hometown wrestler(s)','cal_ht',options=opts(cal_comp),default_company=cal_comp,default_entity='Wrestler',label_search='Search hometown talent')
-    pr=st.text_input('Planned main rivalry',key='cal_rivalry'); notes=st.text_area('Notes',key='cal_notes')
-    if st.button('Save Calendar Entry',key='cal_save'):
-     entry={'month':month,'week':int(week),'date':str(show_date),'company':cal_comp,'show_name':show_name,'show_type':stype,
-      'country':venue['country'],'region':venue['region'],'city':venue['city'],'venue':venue['venue'],'venue_data':venue,'capacity':int(cap),
-      'ticket_price':int(ticket_px),'travel_required':travel_req,'hotel_required':hotel_req,'transportation_required':transport_req,
-      'hometown':hometown,'planned_rivalry':pr,'notes':notes,'status':cal_status}
-     entry=normalize_schedule_entry(entry)
-     st.session_state.schedule_calendar=[e for e in st.session_state.schedule_calendar if int(e.get('week',-1))!=int(week) or e.get('company')!=cal_comp]
-     st.session_state.schedule_calendar.append(entry)
-     st.session_state.schedule_calendar.sort(key=lambda x:(int(x.get('week',0)),x.get('company',''))); st.success(f'Saved Week {week} — {cal_comp}'); st.rerun()
-  else:
-   st.info('Schedule inputs are disabled while locked. View the Year Schedule Table tab or reset to edit.')
-  st.markdown('---')
-  st.warning('Once you lock the full year schedule, you cannot edit weekly shows, PLEs, venues, cities, or dates unless you reset the schedule.')
-  st.session_state.cal_lock_confirm=st.checkbox('I understand — lock the full year schedule',value=st.session_state.get('cal_lock_confirm',False),key='cal_lock_chk',disabled=locked)
-  if st.button('Lock Full Year Schedule',disabled=locked or not st.session_state.get('cal_lock_confirm')):
-   if not st.session_state.schedule_calendar: st.error('Add at least one calendar entry before locking.')
-   else: lock_year_schedule(); st.success('Full year schedule LOCKED.'); st.rerun()
-  st.markdown('---')
-  st.warning('This will erase or unlock your full year schedule. You will lose locked weekly show and PLE schedule settings. Projected venue costs/revenue will be recalculated.')
-  st.session_state.cal_reset_confirm=st.checkbox('I confirm reset / unlock',value=st.session_state.get('cal_reset_confirm',False),key='cal_reset_chk')
-  clr=st.checkbox('Also clear all schedule entries',value=False,key='cal_reset_clear')
-  if st.button('Reset Full Year Schedule',disabled=not st.session_state.get('cal_reset_confirm')):
-   reset_year_schedule(clear_entries=clr); st.success('Schedule unlocked.'+( ' All entries cleared.' if clr else '')); st.rerun()
+  if locked:
+   st.info('Schedule is locked — browse the yearly calendar or unlock at the bottom to edit.')
+  render_calendar_yearly_planner(cal_ex,locked=locked)
+  with st.expander('Full field guide',expanded=False):
+   render_calendar_entry_guide()
+  with st.expander('Lock & reset full year schedule',expanded=False):
+   if locked:
+    st.warning('Schedule is **LOCKED**. Reset below to edit again.')
+   else:
+    st.caption('Lock when your 52-week plan is ready — Book Show will follow it week-by-week.')
+    st.session_state.cal_lock_confirm=st.checkbox('I understand — lock the full year schedule',value=st.session_state.get('cal_lock_confirm',False),key='cal_lock_chk')
+    if st.button('Lock Full Year Schedule',disabled=not st.session_state.get('cal_lock_confirm'),type='primary'):
+     if not st.session_state.schedule_calendar: st.error('Add at least one calendar entry before locking.')
+     else: lock_year_schedule(); st.success('Full year schedule LOCKED.'); st.rerun()
+   st.markdown('---')
+   st.session_state.cal_reset_confirm=st.checkbox('I confirm reset / unlock',value=st.session_state.get('cal_reset_confirm',False),key='cal_reset_chk')
+   clr=st.checkbox('Also clear all schedule entries',value=False,key='cal_reset_clear')
+   if st.button('Reset Full Year Schedule',disabled=not st.session_state.get('cal_reset_confirm')):
+    reset_year_schedule(clear_entries=clr); st.success('Schedule unlocked.'+( ' All entries cleared.' if clr else '')); st.rerun()
  with tab_table:
   st.markdown('##### Yearly Schedule')
   f1,f2,f3,f4,f5,f6=st.columns(6)
@@ -9049,7 +10930,7 @@ elif page=='Schedule Calendar':
      st.caption(f"Hotel {money(ev.get('hotel_estimate',0))} (savings {money(ev.get('hotel_savings',0))}) · Transport {money(ev.get('transport_estimate',0))} (savings {money(ev.get('transport_savings',0))})")
     ba1,ba2,ba3,ba4=st.columns(4)
     if ba1.button('Edit in Plan Schedule',key='cal_act_edit',disabled=locked):
-     load_calendar_entry_into_form(ev); set_active_brand(ev.get('company','NXT')); st.toast('Loaded — open **Plan Schedule** tab.'); st.rerun()
+     load_calendar_entry_into_form(ev); set_active_brand(ev.get('company','NXT')); st.toast(f"Loaded Week {ev.get('week')} — switch to **Plan Schedule** tab."); st.rerun()
     if ba2.button('Duplicate',key='cal_act_dup',disabled=locked):
      dup=normalize_schedule_entry(dict(ev))
      dup['week']=min(52,int(ev.get('week',1))+1)
@@ -9079,6 +10960,9 @@ elif page=='Schedule Calendar':
       st.write(f"Completed — Attendance {int(e.get('actual_attendance',0)):,} · P/L {money(e.get('actual_profit_loss',0))} · Rating {e.get('episode_rating',e.get('actual_rating','—'))}/10")
      st.markdown('---')
  with tab_ai:
+  if gm_mode:
+   gm_mode.render_calendar_approval_panel()
+   st.markdown('---')
   if st.button('Run AI Schedule Analysis',key='cal_ai_run'):
    st.session_state.calendar_ai_notes=schedule_ai_analysis(st.session_state.schedule_calendar)
    st.rerun()
@@ -9383,6 +11267,12 @@ elif page=='NXT Unfiltered':
 elif page=='Trade Center':
  render_page_shell('Trade Center',subtitle='Multiplayer trades — proposal, acceptance, optional Admin approval.',use_brand_tabs=True,tabs_label='Brand',show_meter=True)
  st.caption('Multiplayer trades require proposal → acceptance → optional Admin approval before wrestlers move.')
+ if gm_mode:
+  _tb=gm_mode.trade_block_rows()
+  if _tb:
+   with st.expander(f'🧾 Trade Block scouting ({len(_tb)} listed) — full board in GM Hub',expanded=False):
+    for _t in _tb[:8]:
+     st.write(f"• **{_t['wrestler']}** ({_t['brand']}) — value {_t['trade_value']} · {_t['reason']} · _AI: {_t['recommendation']}_")
  tc_co=st.session_state.get('assigned_company') if st.session_state.get('assigned_company') in PLAYABLE else st.session_state.get('active_brand','NXT')
  render_money_meter(tc_co,compact=False,show_ticker=True,show_sponsor=False)
  for co in PLAYABLE:
@@ -9511,8 +11401,8 @@ elif page=='Roster':
      mem1=clean_name_selector('Wrestler 1',f'mk_m1_{comp}',options=pool,company=comp,entity_type='Wrestler',label_select='Member 1',show_search=True)
      mem2=clean_name_selector('Wrestler 2',f'mk_m2_{comp}',options=pool,company=comp,entity_type='Wrestler',label_select='Member 2',show_search=True)
     with mc2:
-     mem3=clean_name_selector('Wrestler 3 (optional)',f'mk_m3_{comp}',options=['']+pool,current='',company=comp,entity_type='Wrestler',label_select='Member 3',show_search=True)
-     mem4=clean_name_selector('Wrestler 4 (optional)',f'mk_m4_{comp}',options=['']+pool,current='',company=comp,entity_type='Wrestler',label_select='Member 4',show_search=True)
+     mem3=clean_name_selector('Wrestler 3 (optional)',f'mk_m3_{comp}',options=pool,current='',extra_options=[''],company=comp,entity_type='Wrestler',label_select='Member 3',show_search=True)
+     mem4=clean_name_selector('Wrestler 4 (optional)',f'mk_m4_{comp}',options=pool,current='',extra_options=[''],company=comp,entity_type='Wrestler',label_select='Member 4',show_search=True)
     oc1,oc2,oc3=st.columns(3)
     mk_align=oc1.selectbox('Team alignment',['F','H','N'],key=f'mk_align_{comp}')
     mk_sal=oc2.number_input('Team salary (unit)',300000,5000000,int(900000),step=50000,key=f'mk_sal_{comp}')
@@ -9559,11 +11449,20 @@ elif page=='Roster':
   div_new=st.selectbox('Division',div_opts,key=f'add_div_{comp}')
   if st.button('Add to roster',key=f'add_btn_{comp}') and n1.strip():
    if find(n1.strip()): st.error('Wrestler already exists.')
+   elif not can_edit_company(comp): st.error(f'View only — you cannot add roster members to {comp}.')
    else:
     nw=W(n1.strip(),comp,div_new,ovr,aln,sal); loc=frm or HOMETOWNS.get(n1.strip(),'Unknown'); nw['from_location']=loc; nw['hometown']=loc
-    seed_default_contract(nw); st.session_state.roster.append(nw); fix_roster_divisions(); apply_default_hometowns(); sync_company_payroll_stats(); st.success(f'Added {n1}'); st.rerun()
+    seed_default_contract(nw)
+    ok,msg=persist_roster_addition(comp,nw)
+    if ok:
+     if supabase_cloud_active():
+      st.success(f'Saved **{msg}** to your roster (`{nw["wrestler_id"]}`). Upload a picture in Picture Manager.')
+     else:
+      st.success(f'Saved **{msg}** to your roster — stored on disk. Upload a picture in Picture Manager.')
+     st.rerun()
+    else:
+     st.error(f'Could not save roster member: {msg}')
 elif page=='Champions':
- ensure_champion_state()
  comp=roster_brand_tabs(key='champbrand')
  render_brand_badge(comp)
  section_header('Champions', comp)
@@ -9640,9 +11539,10 @@ elif page=='Random Event History':
  render_page_shell('Random Events',subtitle='Test, apply, and track random events — full history with stat changes and follow-ups.',use_brand_tabs=True,tabs_label='Brand',show_meter=True)
  ensure_wrestler_stats()
  evco=st.selectbox('Event company',PLAYABLE,key='rev_co')
+ rev_tgt=clean_name_selector('Test event target wrestler','rev_tgt',options=opts(evco),company=evco,entity_type='Wrestler',default_company=evco,show_search=True,label_search='Search wrestler (optional — random if blank)')
  c1,c2,c3=st.columns(3)
  if c1.button('Generate Test Event'):
-  tgt=random.choice(opts(evco))
+  tgt=rev_tgt or random.choice(opts(evco))
   st.session_state.test_event_preview=build_random_event(evco,target=tgt); st.session_state.test_event_preview['status']='preview'
  if c2.button('Apply Test Event') and st.session_state.get('test_event_preview'):
   ev=dict(st.session_state.test_event_preview); ev['id']=len(st.session_state.random_event_history)+1; ev['status']='unresolved'; ev['bring_back']=True
@@ -9682,6 +11582,18 @@ elif page=='Rivalries':
     if w: w['rivalry_heat']=r['heat']
 elif page=='Character Editor':
  st.markdown('<div class="section-header">Character Editor</div>',unsafe_allow_html=True)
+ st.caption('Profiles are saved to **every session** on this computer when you click **Save all characters**.')
+ csave1,csave2=st.columns([1.2,2])
+ with csave1:
+  if st.button('💾 Save all characters',type='primary',key='cedit_save_all'):
+   n=persist_characters_to_all_sessions()
+   st.success(f'Saved character profiles to all game sessions ({n} entries in shared registry).')
+   st.rerun()
+ with csave2:
+  if st.button('💾 Save characters + pictures',key='cedit_save_all_pics'):
+   n_pic,n_char=persist_pictures_and_characters()
+   st.success(f'Synced {n_pic} portrait slot(s) and {n_char} character profile(s) across all sessions.')
+   st.rerun()
  edit_type=st.radio('Character Type',['Wrestler','Owner','GM','Commentator','Ring Announcer','Podcast Host','Company Account'],horizontal=True)
  comp=brand_tabs('Company',key='cedit')
  if edit_type=='Podcast Host':
@@ -9736,62 +11648,7 @@ elif page=='Character Editor':
    with bfg_card('Character preview'):
     render_long_markdown(char_profile(n),'Profile',expanded=True)
 elif page=='Picture Manager':
- render_page_shell('Picture Manager',subtitle='Upload wrestler, belt, logo, and owner images — placeholders only, no third-party logos.',show_meter=False)
- ensure_selector_css()
- for folder in picture_folder_map().values(): Path(folder).mkdir(parents=True,exist_ok=True)
- kind=st.selectbox('Image type',['wrestler','owner','gm','commentator','podcast host','logo','banner','championship belt'],key='pic_kind')
- pic_comp=None; target=None
- if kind in ('logo','banner'):
-  pic_comp=st.selectbox('Company',PLAYABLE,key='pic_co'); target=pic_comp
- elif kind=='championship belt':
-  pic_comp=brand_tabs('Company',key='picbeltco')
-  target=st.selectbox('Championship title',COMPANIES[pic_comp]['titles'],key=f'pic_belt_title_{pic_comp}')
-  st.caption(f'Saves as: assets/belts/{belt_file_slug(pic_comp,target)}.png')
- elif kind=='owner':
-  pic_comp=brand_tabs('Company',key='picbrand_owner')
-  choices=company_owner_photo_names(pic_comp)
-  if not choices: choices=[COMPANIES[pic_comp].get('owner','Owner')]
-  target=st.selectbox('Owner',choices,key=f'pic_owner_person_{pic_comp}')
-  st.caption(f'Saves as: assets/owners/{slug(target)}.png')
- elif kind=='gm':
-  pic_comp=brand_tabs('Company',key='picbrand_gm')
-  prof=st.session_state.company_profiles.setdefault(pic_comp,dict(COMPANY_PROFILES[pic_comp]))
-  target=(prof.get('gm') or COMPANIES[pic_comp]['gm'] or '').strip()
-  st.text_input('GM',value=target,disabled=True,key=f'pic_gm_person_{pic_comp}')
-  st.caption(f'Saves as: assets/gm/{slug(target)}.png' if target else 'Set GM name on Company Home first.')
- else:
-  pic_comp=brand_tabs('Company',key='picbrand2')
-  if kind=='wrestler':
-   target=clean_name_selector('Wrestler / tag team',f'pic_wrest_{pic_comp}',options=clean_name_pool(pic_comp,'All'),company=pic_comp,company_filter=False,type_filter=False,default_company=pic_comp,show_search=True,label_search='Search wrestler or tag team')
-  elif kind=='podcast host':
-   ensure_nxt_unfiltered_hosts()
-   target=st.selectbox('Podcast Host',opts_podcast_hosts('NXT'),key='pic_ph')
-  else:
-   target=clean_name_selector('Staff',f'pic_staff_{pic_comp}',company=pic_comp,entity_type='Staff',default_company=pic_comp,company_filter=False,type_filter=False)
- with st.container(border=True):
-  st.caption('Preview & upload')
-  if kind=='championship belt':
-   show_belt_img(pic_comp,target,150)
-  elif kind in ('logo','banner'):
-   show_entity_img(pic_comp,kind,140)
-  else:
-   img_kind='podcast_host' if kind=='podcast host' else (kind if kind!='wrestler' else 'wrestler')
-   show_entity_img(target,img_kind,140)
-  f=st.file_uploader('Upload image (png/jpg/jpeg/webp)',type=['png','jpg','jpeg','webp'],key=f'pic_upload_{pic_comp}_{kind}')
-  url=st.text_input('Optional image URL','',key=f'pic_url_{pic_comp}_{kind}')
-  if st.button('Save Picture',key=f'pic_save_{pic_comp}_{kind}',type='primary'):
-   if kind in ('owner','gm','wrestler','commentator','podcast host') and not (target or '').strip():
-    st.error('Select a person before saving.')
-   elif kind=='championship belt' and not target:
-    st.error('Select a championship title before saving.')
-   else:
-    ok,msg=save_picture_asset(kind,pic_comp,target,f=f,url=url)
-    if ok: st.success(msg); st.rerun()
-    else: st.error(msg)
- with bfg_card('Belt filename reference'):
-  for comp in PLAYABLE:
-   st.write(f'**{comp}**')
-   for t in COMPANIES[comp]['titles']: st.caption(f'{belt_file_slug(comp,t)}.png — {t}')
+ render_picture_manager_page()
 elif page=='Finance':
  render_page_shell('Finance',subtitle='Each brand has its own $150M starting budget, payroll, and ledger — banks never share money.',show_meter=False)
  ensure_finance_state()
@@ -9848,11 +11705,30 @@ elif page=='Contracts':
    with bfg_card('Contract Warnings'):
     for msg in warns[:10]: st.write('• '+msg)
   pool=sorted([w for w in payroll_wrestlers(comp)],key=lambda x:(int(x.get('contract_weeks_remaining',999)),-x['popularity']))
-  cfilter=st.selectbox('Filter',['All','Expiring Soon (≤8 weeks)','Negotiating','Refused / Testing FA'],key=f'ctr_f_{comp}')
+  cf1,cf2,cf3=st.columns([1.2,1,1])
+  with cf1: cfilter=st.selectbox('Filter',['All','Expiring Soon (≤8 weeks)','Negotiating','Refused / Testing FA'],key=f'ctr_f_{comp}')
+  with cf2: ctr_search=st.text_input('Search wrestler','',key=f'ctr_srch_{comp}',placeholder='Name filter…')
+  with cf3: ctr_per=st.selectbox('Per page',[8,12,20,30],index=1,key=f'ctr_per_{comp}')
   if cfilter=='Expiring Soon (≤8 weeks)': pool=[w for w in pool if int(w.get('contract_weeks_remaining',99))<=8]
   elif cfilter=='Negotiating': pool=[w for w in pool if w.get('contract_status')=='Negotiating']
   elif cfilter=='Refused / Testing FA': pool=[w for w in pool if w.get('renewal_status') in ('Rejected','Testing Free Agency','Refused Renewal','Wants More Money')]
-  for w in pool:
+  if ctr_search.strip(): pool=[w for w in pool if ctr_search.strip().lower() in (w.get('name') or '').lower()]
+  ctr_pages=max(1,(len(pool)+ctr_per-1)//ctr_per)
+  ctr_sig=f'{cfilter}|{ctr_search}|{ctr_per}'
+  if st.session_state.get(f'ctr_filt_{comp}')!=ctr_sig:
+   st.session_state[f'ctr_pg_{comp}']=1
+   st.session_state[f'ctr_filt_{comp}']=ctr_sig
+  ctr_pg=int(st.session_state.get(f'ctr_pg_{comp}',1))
+  if ctr_pg>ctr_pages: ctr_pg=1; st.session_state[f'ctr_pg_{comp}']=1
+  cn1,cn2,cn3,cn4=st.columns([1.2,.2,.2,.5])
+  with cn1: st.caption(f'**{len(pool)}** contracts · page **{ctr_pg}/{ctr_pages}**')
+  with cn2:
+   if st.button('◀',key=f'ctr_prev_{comp}',disabled=ctr_pg<=1): st.session_state[f'ctr_pg_{comp}']=max(1,ctr_pg-1); st.rerun()
+  with cn3:
+   if st.button('▶',key=f'ctr_next_{comp}',disabled=ctr_pg>=ctr_pages): st.session_state[f'ctr_pg_{comp}']=min(ctr_pages,ctr_pg+1); st.rerun()
+  with cn4: st.number_input('Page',1,ctr_pages,ctr_pg,key=f'ctr_pg_{comp}',label_visibility='collapsed')
+  st.markdown('<div class="roster-scroll-box">',unsafe_allow_html=True)
+  for w in pool[(ctr_pg-1)*ctr_per:ctr_pg*ctr_per]:
    recompute_contract_counters(w); sync_wrestler_from(w)
    c1,c2=st.columns([.16,.84])
    with c1: show_img(w['name'],88)
@@ -9889,17 +11765,88 @@ elif page=='Contracts':
      if s1.button('Short-Term Deal',key=f'cn_st_{comp}_{w["name"]}'): apply_contract_offer(w,comp,off_sal,1,bonus,creative,media,title_push); st.rerun()
      if s2.button('Long-Term Deal',key=f'cn_lt_{comp}_{w["name"]}'): apply_contract_offer(w,comp,off_sal,5,bonus,creative,media,title_push); st.rerun()
      if s3.button('Offer Signing Bonus Only',key=f'cn_sb_{comp}_{w["name"]}'): apply_contract_offer(w,comp,off_sal,off_yrs,bonus+500000,creative,media,title_push); st.rerun()
+  st.markdown('</div>',unsafe_allow_html=True)
   with st.expander('Negotiation history',expanded=False):
    for h in [x for x in st.session_state.negotiation_history if x.get('company')==comp][:20]:
     st.write(f"Week {h.get('week')} — **{h.get('name')}** — {h.get('action')}: {h.get('detail','')}")
 elif page=='Save Center':
- render_page_shell('Save Center',subtitle='Download and load universe saves — full rosters, finances, Twitter, calendar, and GM progress.',show_meter=False)
+ render_page_shell('Save Center',subtitle='Download backups and — with Admin Save Mode — sync pictures, characters, and full universe saves.',show_meter=False)
+ render_admin_save_mode_panel()
  save_keys=_universe_save_keys()+['last_grade','last_hotel_cost','last_hotel_savings','last_transport_savings','last_profit_loss','last_money_generated','last_money_lost','nxt_uf_tts_speed','nxt_uf_tts_energy','week_progress','player_assignments']
  data={k:st.session_state[k] for k in save_keys if k in st.session_state}
- st.download_button('Download Universe Save',json.dumps(data,indent=2,default=str),'bound_for_glory_save.json','application/json')
- if is_admin() and st.button('Save universe to shared JSON (local)',key='sc_save_disk'): save_universe(); st.success('Saved to data/universe/')
- up=st.file_uploader('Load Save File',type=['json'])
- if up and st.button('Load Save',disabled=not is_admin()):
+ st.download_button('Download Universe Save (any role)',json.dumps(data,indent=2,default=str),'bound_for_glory_save.json','application/json',key='sc_download')
+ if st.button('Fix all pictures now',key='sc_fix_pics',type='primary'):
+  stats,n=repair_and_sync_all_pictures()
+  st.success(f"Linked **{stats.get('linked_count',0)}** portraits · synced **{n}** slots across all sessions.")
+  st.rerun()
+ with st.expander('Recover pictures from Streamlit Cloud',expanded=not sb.supabase_configured()):
+  st.markdown(
+   'Your portraits were saved on **Streamlit Cloud**. To pull them onto this Mac automatically, '
+   'paste the two Supabase lines from **Manage app → Secrets** on your cloud deploy.'
+  )
+  c1,c2=st.columns(2)
+  with c1: sc_url=st.text_input('SUPABASE_URL',value=st.session_state.get('_recover_sb_url',''),key='sc_recover_url',placeholder='https://xxxx.supabase.co')
+  with c2: sc_key=st.text_input('SUPABASE_KEY',value='',type='password',key='sc_recover_key',placeholder='paste key from Streamlit secrets')
+  if st.button('Connect & pull full online save',type='primary',key='sc_recover_pull'):
+   try:
+    if sc_url.strip() and sc_key.strip():
+     sb.write_supabase_secrets(sc_url.strip(),sc_key.strip())
+     st.session_state._recover_sb_url=sc_url.strip()
+    elif not sb.supabase_configured():
+     st.error('Paste SUPABASE_URL and SUPABASE_KEY from Streamlit Cloud secrets first.')
+     st.stop()
+    import bfg_cloud_pull as cloud_pull
+    inv=(st.session_state.get('invite_code') or 'BFG-9309').strip().upper()
+    result=cloud_pull.pull_online_save_to_local(invite_code=inv,local_session_id=get_session_id())
+    if result.get('ok'):
+     load_universe_from_disk()
+     save_universe()
+     pics=result.get('pictures_by_brand',{})
+     st.success(
+      f"Pulled **{result.get('invite_code')}** from cloud — **{result.get('roster_count',0)}** wrestlers · "
+      f"**{result.get('imported_pictures',0)}** portraits imported · linked **{result.get('roster_with_pictures',0)}** on roster "
+      f"(NXT {pics.get('NXT',0)} · SD {pics.get('SmackDown',0)} · WCW {pics.get('WCW',0)})."
+     )
+     if result.get('picture_errors'): st.warning('Some portraits: ' + '; '.join(result['picture_errors'][:5]))
+     st.rerun()
+    st.error(result.get('error','Cloud pull failed'))
+   except Exception as ex:
+    st.error(f'Recovery failed: {ex}')
+ if sb.supabase_configured():
+  inv=(st.session_state.get('invite_code') or 'BFG-9309').strip()
+  if st.button(f'Pull pictures again ({inv})',key='sc_pull_cloud_pics'):
+   result=pic_sync.recover_pictures_from_streamlit(invite_codes=[inv],roster=st.session_state.roster)
+   if result.get('ok'):
+    save_universe()
+    st.success(f"Imported **{result.get('imported',0)}** portraits from cloud ({result.get('cloud_refs',0)} refs).")
+    if result.get('errors'): st.warning('Some images could not download: ' + '; '.join(result['errors'][:5]))
+    st.rerun()
+   else:
+    st.error(result.get('error','Cloud pull failed'))
+ if admin_save_mode_active():
+  with bfg_card('Admin save actions'):
+   if st.button('Save universe to shared JSON (local)',key='sc_save_disk',type='primary'):
+    save_universe()
+    st.success('Saved to data/sessions/ on this computer.')
+   sc1,sc2=st.columns(2)
+   with sc1:
+    if st.button('Sync pictures to ALL sessions',key='sc_sync_pics',help='Copies every uploaded portrait into easywork, BFG-9309, and all other saves on this computer.'):
+     pic_sync.apply_registry_to_roster(st.session_state.roster)
+     n=pic_sync.propagate_pictures_to_all_sessions(st.session_state.roster,st.session_state.get('wrestler_image_meta',{}))
+     save_universe()
+     st.success(f'Pictures synced across all sessions ({n} wrestler portraits in shared registry).')
+     st.rerun()
+   with sc2:
+    if st.button('Sync characters to ALL sessions',key='sc_sync_chars',help='Copies Character Editor wrestler, staff, and podcast host profiles into every save.'):
+     n=persist_characters_to_all_sessions()
+     st.success(f'Characters synced across all sessions ({n} profiles in shared registry).')
+     st.rerun()
+   if st.button('Sync pictures + characters to ALL sessions',key='sc_sync_both'):
+    n_pic,n_char=persist_pictures_and_characters()
+    st.success(f'Synced {n_pic} portraits and {n_char} character profiles across all sessions.')
+    st.rerun()
+  up=st.file_uploader('Load Save File',type=['json'],key='sc_upload')
+  if up and st.button('Load Save',key='sc_load_btn'):
    try:
     loaded=json.loads(up.read().decode('utf-8'))
    except json.JSONDecodeError as ex:
@@ -9908,8 +11855,103 @@ elif page=='Save Center':
     for k,v in loaded.items(): st.session_state[k]=v
     ensure_extended_state(); ensure_week_progress_state(); storylines.ensure_storyline_state(); sponsor_obj.ensure_sponsor_objectives(COMPANIES)
     st.session_state._universe_loaded=True; save_week_state(); save_universe(); st.success('Save loaded.'); st.rerun()
- elif up and not is_admin(): st.caption('Only Admin can load a full universe save file.')
+ else:
+  st.caption('Enable **Admin Save Mode** above to unlock save-to-disk, sync, and load.')
  st.info('Your full universe save file includes rosters, champions, finances, booking history, Twitter, calendar, rankings, and all GM progress.')
+elif page=='Tag Teams':
+ comp=render_page_shell('Tag Teams',subtitle='Brand War payroll view — team salary split per member, with no double pay for wrestlers already on singles contracts.',use_brand_tabs=True,show_meter=False)
+ teams=[w for w in roster(comp) if is_tag_team_entry(w) and is_team_active(comp,w['name'])]
+ singles_paid={w['name'].lower() for w in roster(comp) if not is_tag_team_entry(w)}
+ if not teams:
+  st.info(f'No active tag teams on {comp} yet — create one on the Roster page (Tag Teams tab).')
+ total_extra=0
+ for tw in teams:
+  members=team_members_for(tw,comp); ov=get_team_override(comp,tw['name'])
+  team_ovr=calc_team_overall(tw,members,ov)
+  listed=int(tw.get('salary',0) or 0); split=listed/max(1,len(members))
+  extra=sum(split for m in members if m['name'].lower() not in singles_paid); total_extra+=extra
+  with bfg_card(tw['name']):
+   st.markdown(f"<span class='overall-badge'>TEAM OVR {team_ovr}</span> <span class='align-badge'>{align(calc_team_alignment(members,ov.get('alignment_manual')))}</span>",unsafe_allow_html=True)
+   st.write(f"Members: **{', '.join(m['name'] for m in members)}**")
+   st.write(f"Listed Team Salary: **{money(listed)}**")
+   st.write(f"Split Per Member: **{money(int(split))}**")
+   st.write(f"Actual {comp} Budget Cost After No Double Pay: **{money(int(extra))}**")
+   for m in members:
+    st.write(f"- {m['name']}: "+('already paid individually, **$0 extra**' if m['name'].lower() in singles_paid else f'**{money(int(split))}**'))
+ if teams:
+  st.success(f'Total extra tag payroll for {comp} after no double pay: **{money(int(total_extra))}** across {len(teams)} active team(s).')
+elif page=='Factions':
+ comp=render_page_shell('Factions',subtitle='Stables are paid through individual contracts — faction payroll stays $0, but they can still land commercials, sponsor deals, walkouts, and civil wars.',use_brand_tabs=True,show_meter=False)
+ facs=list(dict.fromkeys(list(COMPANY_FACTIONS.get(comp,[]))+list(st.session_state.get('factions',{}).get(comp,[]) or [])))
+ if not facs:
+  st.info(f'No factions listed for {comp} yet.')
+ for fac in facs:
+  defs=tag_team_member_defs(fac)
+  members=[resolve_member(m,comp) for m in defs]
+  with bfg_card(fac):
+   if members:
+    ovs=[m.get('overall',0) for m in members if m.get('overall')]
+    if ovs:
+     st.markdown(f"<span class='overall-badge'>FACTION OVR {int(round(sum(ovs)/len(ovs)))}</span>",unsafe_allow_html=True)
+    st.write(f"Members: **{', '.join(m['name'] for m in members)}**")
+   else:
+    st.write(f'Members: **{comp} stable** — individual members are tracked on the Roster page.')
+   st.write('Faction Payroll: **$0**')
+   st.caption('Members are paid through individual contracts, but factions can still get commercials, sponsor deals, walkouts, and civil wars.')
+elif page=='Story Grader':
+ comp=render_page_shell('Story Grader',subtitle='Paste a written episode or story — grade it with the free rule-based judge or the AI creative judge.',use_brand_tabs=True,show_meter=False)
+ sg_names=sorted([w['name'] for w in roster(comp) if not is_tag_team_entry(w)],key=str.lower)
+ sg_etype=st.selectbox('Episode Type',['Regular weekly show','Go-home before PLE','Fallout after PLE','Tournament episode','Faction war episode','Title-focused episode','Character-building episode'],key='sg_etype')
+ sg_featured=st.selectbox('Featured Star',sg_names or ['—'],key='sg_featured')
+ sg_riv_opts=[r.get('name','') for r in st.session_state.get('rivalries',[]) if (r.get('company',comp)==comp or 'company' not in r) and r.get('name')]
+ sg_riv=st.selectbox('Top Rivalry / Main Story',sg_riv_opts+['Custom…'],key='sg_riv') if sg_riv_opts else 'Custom…'
+ if sg_riv=='Custom…':
+  sg_riv=st.text_input('Custom rivalry / main story','',key='sg_riv_custom')
+ sg_story=st.text_area('Paste Episode Story',height=330,key='sg_story')
+ sg_tab_rules,sg_tab_ai=st.tabs(['Rule-Based Grader','AI Creative Judge'])
+ with sg_tab_rules:
+  st.caption('Fast offline grader — uses your Character Bible, champions, story keywords, rivalry heat, shock moments, and business value. Free, no API key needed.')
+  if st.button('Grade Story With Rules',type='primary',key='sg_rules_go',disabled=not sg_story.strip()):
+   st.session_state.sg_rule_result=brandwar_story_grade(sg_story,sg_etype,sg_featured,sg_riv,comp)
+  if st.session_state.get('sg_rule_result'):
+   sg_final,sg_grade,sg_notes=st.session_state.sg_rule_result
+   st.subheader(f'Final Show Grade: {sg_grade} — {sg_final:.1f}/10')
+   st.write(f'Suggested show rating: **{round(sg_final)}**')
+   for n in sg_notes: st.write('- '+n)
+ with sg_tab_ai:
+  st.caption('Smarter creative judge — reads the episode like a creative director. Needs an OpenAI key; the rule-based tab stays free.')
+  render_openai_key_helper()
+  if st.button('Grade Story With AI',key='sg_ai_go',disabled=not sg_story.strip()):
+   with st.spinner('AI judge reading your episode…'):
+    sg_out=ai(brandwar_ai_grade_prompt(sg_story,sg_etype,sg_featured,sg_riv,comp),twitter=True)
+   st.session_state.sg_ai_result=sg_out or 'AI unavailable — connect an OpenAI key above, or use the free Rule-Based Grader tab.'
+  if st.session_state.get('sg_ai_result'):
+   st.subheader('AI Creative Judge')
+   st.markdown(st.session_state.sg_ai_result)
+ if fair_brands and sg_names:
+  st.divider()
+  section_header('Match Rating Lab',comp)
+  st.caption('Fair Brand Engine — match ratings come from the story told in the ring + wrestling ability, not popularity or brand size.')
+  ml1,ml2=st.columns(2)
+  ml_a=ml1.selectbox('Wrestler A',sg_names,key='ml_a')
+  ml_b=ml2.selectbox('Wrestler B',sg_names,index=min(1,len(sg_names)-1),key='ml_b')
+  ml_heat=50
+  for r in st.session_state.get('rivalries',[]):
+   if ml_a in r.get('wrestlers',[]) and ml_b in r.get('wrestlers',[]): ml_heat=int(r.get('heat',50)); break
+  ms1,ms2,ms3=st.columns(3)
+  ml_story=ms1.slider('Story told in the ring',0,100,70,key='ml_story',help='How clearly the match told its story — selling, callbacks, escalation, payoff.')
+  ml_chem=ms2.slider('Chemistry',0,100,65,key='ml_chem')
+  ml_stip=ms3.slider('Stipulation fit',0,100,60,key='ml_stip')
+  ml_crowd=st.slider('Crowd interest',0,100,65,key='ml_crowd')
+  st.caption(f'Rivalry heat auto-detected: **{ml_heat}**')
+  if st.button('Rate This Match',type='primary',key='ml_go',disabled=ml_a==ml_b):
+   wa=fair_brands.wrestler_from_dict(find(ml_a) or {'name':ml_a,'company':comp})
+   wb=fair_brands.wrestler_from_dict(find(ml_b) or {'name':ml_b,'company':comp})
+   st.session_state.ml_result=fair_brands.calculate_match_rating(wa,wb,ml_story,ml_heat,ml_chem,ml_stip,ml_crowd)
+  if st.session_state.get('ml_result'):
+   mr=st.session_state.ml_result
+   st.subheader(f"Match Rating: {mr['rating_10']}/10 ({mr['rating_100']}/100)")
+   st.write(mr['summary'])
 else:
  st.session_state.nav_page='Dashboard'
  st.rerun()

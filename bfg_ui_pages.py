@@ -73,63 +73,158 @@ Money matters — but it should follow great stories and completed objectives.
     if st.button('Solo test mode (quick)', key='gate_solo'):
         st.session_state.gate_screen = 'login'
         st.rerun()
+    st.markdown('---')
+    with h.bfg_card('I have my invite code + brand code'):
+        st.caption('Use the **invite code** (BFG-xxxx) plus your **8-letter brand code** (NXT, WCW, SmackDown, or Admin).')
+        j_inv = st.text_input('Invite code', key='gate_join_inv', placeholder='BFG-6051')
+        j_name = st.text_input('Your name', key='gate_join_name', value='Joshua')
+        j_acc = st.text_input('Brand code', key='gate_join_acc', placeholder='NXT / WCW / Admin — 8 characters')
+        if j_inv.strip() and hasattr(h, 'lookup_invite_session'):
+            hit = h.lookup_invite_session(j_inv.strip())
+            if hit:
+                pics = hit.get('picture_stats') or {}
+                st.success(
+                    f"Found **{hit.get('game_name', 'game')}** on this computer · Week {hit.get('week', 0)} · "
+                    f"pictures NXT {pics.get('NXT', 0)} · WCW {pics.get('WCW', 0)} · SmackDown {pics.get('SmackDown', 0)}"
+                )
+                st.code(
+                    f"Invite: {hit.get('invite_code', '')}\n"
+                    f"Admin: {hit.get('admin_code', '')}\n"
+                    f"NXT: {hit.get('nxt_code', '')}\n"
+                    f"SmackDown: {hit.get('smackdown_code', '')}\n"
+                    f"WCW: {hit.get('wcw_code', '')}",
+                    language=None,
+                )
+            else:
+                st.warning('Invite not on **this computer**. Use the same Streamlit URL where you created the game, or Continue Saved Game to clone a local copy.')
+        if st.button('Join my session', type='primary', key='gate_join_codes_btn'):
+            if hasattr(h, 'request_join_with_codes'):
+                if not j_inv.strip() or not j_acc.strip() or not j_name.strip():
+                    st.error('Enter invite code, your name, and brand code.')
+                else:
+                    h.request_join_with_codes(j_inv.strip(), j_acc.strip(), j_name.strip())
+    st.markdown('---')
+    if hasattr(h, 'request_quick_login'):
+        cqe1, cqe2 = st.columns(2)
+        with cqe1:
+            if st.button(
+                '▶ ENTER BFG-9309 (Admin)',
+                type='primary',
+                use_container_width=True,
+                key='gate_quick_enter',
+            ):
+                h.request_quick_login('BFG-9309', 'Joshua')
+        with cqe2:
+            if hasattr(h, 'request_join_with_codes') and st.button(
+                '▶ BFG-9309 + 3K5FC2PY',
+                use_container_width=True,
+                key='gate_join_9309_code',
+            ):
+                h.request_join_with_codes('BFG-9309', '3K5FC2PY', 'Joshua')
+        st.caption('**BFG-9309** easywork · your code **3K5FC2PY** = Admin · or one-click enter with no codes.')
+    saves = h.list_saved_sessions() if hasattr(h, 'list_saved_sessions') else []
+    if saves:
+        st.caption('Saved games here: ' + ', '.join(f"{s.get('game_name')} ({s.get('invite_code','local')})" for s in saves[:4]))
+
+
+def _continue_session(s, as_admin=True):
+    h = _h()
+    if hasattr(h, 'request_continue_session'):
+        h.request_continue_session(s['session_id'], 'Joshua')
+        return
+    import bfg_sessions as mp
+    meta = mp.load_session_meta(s['session_id']) or {} if s['session_id'] != 'local' else {}
+    st.session_state.session_id = s['session_id']
+    st.session_state.logged_in = True
+    st.session_state.game_name = s.get('game_name', 'Continued Game')
+    st.session_state.invite_code = s.get('invite_code') or meta.get('invite_code', '')
+    st.session_state._universe_loaded = False
+    st.session_state.gate_screen = ''
+    st.rerun()
 
 
 def render_continue_saved():
     h = _h()
-    st.markdown('### Continue Saved Game')
     import bfg_sessions as mp
-    sessions = []
-    root = mp.SESSIONS_ROOT
-    local_uni = h.UNIVERSE_DATA_DIR / 'universe.json'
-    if local_uni.exists():
-        try:
-            import json
-            data = json.loads(local_uni.read_text(encoding='utf-8'))
-            sessions.append({
-                'session_id': 'local',
-                'game_name': data.get('game_name', 'Solo test universe'),
-                'week': data.get('week', 0),
-                'updated': data.get('last_updated_at', ''),
-            })
-        except Exception:
-            pass
-    if root.exists():
-        for p in sorted(root.iterdir(), key=lambda x: x.stat().st_mtime if x.is_dir() else 0, reverse=True):
-            if not p.is_dir():
-                continue
-            uni = p / 'universe.json'
-            if uni.exists():
-                try:
-                    import json
-                    data = json.loads(uni.read_text(encoding='utf-8'))
-                    sessions.append({
-                        'session_id': data.get('session_id', p.name),
-                        'game_name': data.get('game_name', p.name),
-                        'week': data.get('week', 0),
-                        'updated': data.get('last_updated_at', ''),
-                    })
-                except Exception:
-                    pass
+
+    st.markdown('### Continue Saved Game')
+    st.caption('Pick a universe on **this computer**. Use **Clone → new session** if old invite codes stopped working.')
+    sessions = mp.list_saved_sessions()
     if not sessions:
         st.info('No saved universes found on this server. Create or join a private game, or use solo test mode.')
     else:
         for s in sessions[:12]:
-            if st.button(
-                f"{s.get('game_name', 'Universe')} — Week {s.get('week', 0)} · {s.get('updated', '')}",
-                key=f"cont_{s['session_id'][:12]}",
-            ):
-                st.session_state.session_id = s['session_id']
-                st.session_state.logged_in = True
-                st.session_state.player_name = 'Returning GM'
-                st.session_state.role = 'Admin'
-                st.session_state.assigned_company = 'All'
-                st.session_state.game_name = s.get('game_name', 'Continued Game')
-                st.session_state._universe_loaded = False
-                h.sync_session_from_storage(light=False)
-                st.session_state.gate_screen = ''
+            sid = s['session_id']
+            with h.bfg_card(s.get('game_name', 'Universe')):
+                st.markdown(
+                    f"**{s.get('game_name', 'Universe')}** — Week {s.get('week', 0)} · updated {s.get('updated', '—')}"
+                )
+                pics = s.get('picture_stats') or {}
+                pic_line = f" · pictures NXT {pics.get('NXT', 0)} WCW {pics.get('WCW', 0)} SD {pics.get('SmackDown', 0)}"
+                if s.get('invite_code'):
+                    st.caption(f"Invite `{s['invite_code']}` · session `{sid[:12]}…`{pic_line}")
+                else:
+                    st.caption(f"Session `{sid[:12]}…`{pic_line}")
+                if s.get('admin_code'):
+                    st.code(
+                        f"Invite: {s.get('invite_code', '')}\n"
+                        f"Admin: {s.get('admin_code', '')}\n"
+                        f"NXT: {s.get('nxt_code', '')}\n"
+                        f"SmackDown: {s.get('smackdown_code', '')}\n"
+                        f"WCW: {s.get('wcw_code', '')}",
+                        language=None,
+                    )
+                if pics.get('total', 0) == 0 or pics.get('WCW', 0) == 0 or pics.get('SmackDown', 0) == 0:
+                    st.warning(
+                        'Pictures for this save on **this computer**: '
+                        f"NXT {pics.get('NXT', 0)} · SmackDown {pics.get('SmackDown', 0)} · WCW {pics.get('WCW', 0)}. "
+                        'Full portraits may still be on **Streamlit Cloud** — open that app, or use Save Center → Pull from Supabase.'
+                    )
+                c1, c2, c3, c4, c5 = st.columns(5)
+                if c1.button('Admin', key=f'cont_admin_{sid[:12]}', type='primary', use_container_width=True):
+                    _continue_session(s, as_admin=True)
+                if c2.button('NXT GM', key=f'cont_nxt_{sid[:12]}', use_container_width=True):
+                    if s.get('nxt_code') and hasattr(h, 'request_join_with_codes'):
+                        h.request_join_with_codes(s['invite_code'], s['nxt_code'], 'Joshua')
+                if c3.button('SmackDown GM', key=f'cont_sd_{sid[:12]}', use_container_width=True):
+                    if s.get('smackdown_code') and hasattr(h, 'request_join_with_codes'):
+                        h.request_join_with_codes(s['invite_code'], s['smackdown_code'], 'Joshua')
+                if c4.button('WCW GM', key=f'cont_wcw_{sid[:12]}', use_container_width=True):
+                    if s.get('wcw_code') and hasattr(h, 'request_join_with_codes'):
+                        h.request_join_with_codes(s['invite_code'], s['wcw_code'], 'Joshua')
+                if c5.button('Clone', key=f'cont_clone_{sid[:12]}', use_container_width=True):
+                    st.session_state._clone_source_id = sid
+                    st.session_state._clone_source_name = s.get('game_name', 'Universe')
+                    st.rerun()
+        if st.session_state.get('_clone_source_id'):
+            src = st.session_state._clone_source_id
+            src_name = st.session_state.get('_clone_source_name', 'Universe')
+            st.markdown('---')
+            st.markdown(f'#### Clone **{src_name}** → new session')
+            st.caption('Keeps roster, pictures, champions, calendar, and finances. Gives you **new login codes**.')
+            new_name = st.text_input('New game name', value=f'{src_name} v2', key='cont_clone_gname')
+            creator = st.text_input('Your name (Admin)', value='Joshua', key='cont_clone_admin')
+            c1, c2 = st.columns(2)
+            if c1.button('Create cloned session', type='primary', key='cont_clone_confirm'):
+                if not new_name.strip() or not creator.strip():
+                    st.error('Enter a game name and your name.')
+                else:
+                    try:
+                        meta = mp.clone_private_session(src, new_name.strip(), creator.strip())
+                        st.session_state.pop('_clone_source_id', None)
+                        st.session_state.pop('_clone_source_name', None)
+                        st.session_state.mp_created_codes = meta
+                        st.session_state.gate_screen = 'login'
+                        st.success('Cloned successfully. Save your **new codes** on the next screen.')
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f'Clone failed: {ex}')
+            if c2.button('Cancel clone', key='cont_clone_cancel'):
+                st.session_state.pop('_clone_source_id', None)
+                st.session_state.pop('_clone_source_name', None)
                 st.rerun()
     if st.button('← Back', key='cont_back'):
+        st.session_state.pop('_clone_source_id', None)
         st.session_state.gate_screen = 'intro'
         st.rerun()
 
@@ -221,12 +316,26 @@ def render_sponsor_objectives_page():
         show_meter=True,
     )
     objs = spo.company_objectives(comp)
+    _badge_cls = {'Completed': 'green', 'Paid': 'green', 'Met': 'green', 'Submitted': 'blue',
+                  'In Progress': 'gold', 'Active': 'gold', 'Partial': 'silver',
+                  'Failed': 'red', 'Not Started': 'gray'}
     for o in objs:
         pct = min(100, int(100 * int(o.get('progress', 0)) / max(1, int(o.get('target', 3)))))
-        with h.bfg_card(f"{o.get('title', 'Objective')} — {o.get('status', 'Active')}"):
+        stt = o.get('status', 'Active')
+        with h.bfg_card():
+            st.markdown(
+                f"**🤝 {o.get('sponsor', o.get('title', 'Sponsor'))} — {o.get('title', 'Objective')}** "
+                f"<span class='bfg-badge {_badge_cls.get(stt, 'gray')}'>{stt}</span>",
+                unsafe_allow_html=True,
+            )
             st.progress(pct / 100.0)
             st.write(o.get('requirement', ''))
-            st.write(f"Progress **{o.get('progress', 0)} / {o.get('target', 3)}** · Payout **{h.money(o.get('payout', 0))}** · Penalty **{h.money(o.get('penalty', 0))}**")
+            st.markdown(
+                f"<span class='bfg-badge silver'>Progress {o.get('progress', 0)}/{o.get('target', 3)}</span>"
+                f"<span class='bfg-badge green'>Payout {h.money(o.get('payout', 0))}</span>"
+                f"<span class='bfg-badge red'>Penalty {h.money(o.get('penalty', 0))}</span>",
+                unsafe_allow_html=True,
+            )
             if h.can_edit_company(comp) and o.get('status') == 'Active' and st.button('Mark progress +1', key=f"spo_{o['id']}"):
                 o['progress'] = min(int(o.get('target', 3)), int(o.get('progress', 0)) + 1)
                 if o['progress'] >= int(o.get('target', 3)):
